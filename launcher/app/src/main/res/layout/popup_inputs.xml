@@ -3,8 +3,8 @@
     android:id="@+id/panel"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/bg_dock_tray"
-    android:elevation="12dp"
+    android:background="@drawable/bg_settings_opaque"
+    android:elevation="16dp"
     android:orientation="vertical"
     android:padding="6dp">
 

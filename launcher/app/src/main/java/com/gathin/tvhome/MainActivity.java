@@ -230,6 +230,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private View ambient;
     private TextView heroName;
     private String targetHeroLabel;
+    private float lastHeroShelfY = -1f;
     /** The top shelf: heroName, plus the cinematic shelf's "Last opened" line and dock position dots. */
     private View hero;
     private TextView heroMeta;
@@ -1749,6 +1750,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         int color = adapter.ambientColorAt(position);
         if (dockDecoration != null) dockDecoration.setAccentColor(color);
         float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
+        lastHeroShelfY = y;
         targetHeroLabel = null;
         if (heroName != null) {
             heroName.animate().cancel();
@@ -1844,7 +1846,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         updateHeroDots(position);
     }
 
-    /** Smoothly transitions heroName when focus moves to the Midsection or Top Bar. */
+    private float getHeroShelfY() {
+        if (lastHeroShelfY > 100f * density) {
+            return lastHeroShelfY;
+        }
+        if (grid != null && grid.getHeight() > 0) {
+            int heroH = hero != null && hero.getHeight() > 0 ? hero.getHeight() : (int) (64 * density);
+            float computed = grid.getY() + grid.getPaddingTop() - 36 * density - heroH;
+            if (computed > 120 * density) {
+                lastHeroShelfY = computed;
+                return computed;
+            }
+        }
+        return 165f * density;
+    }
+
+    /** Smoothly transitions heroName when focus moves to the Midsection or Top Bar, sliding cleanly from the left side in the shelf. */
     private void transitionHeroLabel(String newLabel) {
         if (heroName == null || TextUtils.isEmpty(newLabel)) return;
         if (newLabel.equals(targetHeroLabel)
@@ -1854,34 +1871,44 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         targetHeroLabel = newLabel;
         if (heroMeta != null) heroMeta.setVisibility(View.INVISIBLE);
         if (heroDots != null) heroDots.setVisibility(View.INVISIBLE);
+        float shelfY = getHeroShelfY();
         if (hero != null) {
             hero.animate().cancel();
-            hero.setTranslationX(0f);
-            hero.setAlpha(1f);
+            hero.setY(shelfY);
             heroShown = true;
         }
         heroName.animate().cancel();
         if (!animations || reducedMotion) {
+            if (hero != null) {
+                hero.setTranslationX(0f);
+                hero.setAlpha(1f);
+            }
             heroName.setTranslationX(0f);
             heroName.setAlpha(1f);
             heroName.setText(newLabel);
             return;
         }
-        heroName.animate()
-                .alpha(0f)
-                .translationX(-8 * density)
-                .setDuration(120L)
-                .withEndAction(() -> {
-                    if (heroName == null) return;
-                    heroName.setText(newLabel);
-                    heroName.setTranslationX(8 * density);
-                    heroName.animate()
-                            .alpha(1f)
-                            .translationX(0f)
-                            .setDuration(120L)
-                            .start();
-                })
-                .start();
+        if (hero != null) {
+            hero.animate()
+                    .alpha(0f)
+                    .translationX(-40f * density)
+                    .setDuration(120L)
+                    .withEndAction(() -> {
+                        if (heroName == null || hero == null) return;
+                        heroName.setText(newLabel);
+                        hero.setY(getHeroShelfY());
+                        hero.setTranslationX(-120f * density);
+                        hero.animate()
+                                .alpha(1f)
+                                .translationX(0f)
+                                .setDuration(240L)
+                                .setInterpolator(new PathInterpolator(0.16f, 1.0f, 0.3f, 1.0f))
+                                .start();
+                    })
+                    .start();
+        } else {
+            heroName.setText(newLabel);
+        }
     }
 
     // ---- cinematic shelf -------------------------------------------------------------------------
@@ -3076,6 +3103,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         boolean underGear = topMenu;
         View anchor = findViewById(underGear ? R.id.btnSettings : R.id.btnInputs);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        View inputsHeader = panel.findViewById(R.id.tvInputsHeader);
+        if (inputsHeader != null) inputsHeader.setVisibility(View.VISIBLE);
         LinearLayout rows = panel.findViewById(R.id.rows);
 
         // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
@@ -3229,6 +3258,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
         attachCapsuleDropdownKeyNavigation(rows, popup, anchor);
+        setDropdownScrimActive(true);
+        popup.setOnDismissListener(() -> {
+            setDropdownScrimActive(false);
+            if (openPopup == popup) openPopup = null;
+        });
 
         int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
         dropIn(popup, panel, anchor, alignment);
@@ -3299,6 +3333,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showTopMenu() {
         View anchor = findViewById(R.id.btnSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        View inputsHeader = panel.findViewById(R.id.tvInputsHeader);
+        if (inputsHeader != null) inputsHeader.setVisibility(View.VISIBLE);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (220 * density));
         // Inputs opens its own list once this one has closed.
@@ -3328,8 +3364,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showSettingsMenu() {
         View anchor = findViewById(R.id.btnSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        View inputsHeader = panel.findViewById(R.id.tvInputsHeader);
+        if (inputsHeader != null) inputsHeader.setVisibility(View.VISIBLE);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
+        setDropdownScrimActive(true);
+        popup.setOnDismissListener(() -> {
+            setDropdownScrimActive(false);
+            if (openPopup == popup) openPopup = null;
+        });
         if (!launcherSettingsButton) addSettingsMenuRow(rows, popup, R.string.launcher_settings, () -> startActivityForResult(
                 new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
         // Firmware that ships its own settings app next to the AOSP one (Xiaomi China is one): the
@@ -3365,8 +3408,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Empty dock slots and the Default-home tile carry the launcher's own package: no menu for them.
         if (key == null || pkg == null || pkg.equals(getPackageName())) return;
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        View tileMenuHeader = panel.findViewById(R.id.tvInputsHeader);
+        if (tileMenuHeader != null) tileMenuHeader.setVisibility(View.GONE);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
+        setDropdownScrimActive(true);
+        popup.setOnDismissListener(() -> {
+            setDropdownScrimActive(false);
+            if (openPopup == popup) openPopup = null;
+        });
         if (dockRow && position < adapter.movableCount()) {
             boolean inDock = position < COLUMNS;
             addSettingsMenuRow(rows, popup, inDock ? R.string.tile_replace_in_dock : R.string.tile_add_to_dock,
@@ -4636,16 +4686,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .start();
         }
 
-        // 5. Hero spotlight text & glass highlight (slides cleanly in from the left side)
+        // 5. Hero spotlight text & glass highlight (slides cleanly in from the left side in the shelf)
         if (hero != null) {
             hero.animate().cancel();
             hero.setVisibility(View.VISIBLE);
-            hero.setTranslationY(0f);
+            hero.setY(getHeroShelfY());
             hero.setTranslationX(-140f * density);
             hero.setAlpha(0f);
             hero.animate()
                     .translationX(0f)
-                    .translationY(0f)
                     .alpha(1f)
                     .setDuration(WAKE_ANIM_MS)
                     .setInterpolator(relaxedEase)
