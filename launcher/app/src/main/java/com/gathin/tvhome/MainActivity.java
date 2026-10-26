@@ -3922,7 +3922,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         dropdownScrimView = new View(this);
         dropdownScrimView.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        dropdownScrimView.setBackgroundColor(Color.argb(102, 0, 0, 0)); // 40% black
+        dropdownScrimView.setBackgroundColor(Color.argb(220, 6, 8, 14)); // 86% deep opaque frosted scrim
         dropdownScrimView.setAlpha(0f);
         dropdownScrimView.setVisibility(View.GONE);
         dropdownScrimView.setFocusable(false);
@@ -3936,9 +3936,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
 
         if (root instanceof ViewGroup) {
-            int insertIdx = ((ViewGroup) root).indexOfChild(findViewById(R.id.topButtons));
-            if (insertIdx < 0) insertIdx = ((ViewGroup) root).getChildCount();
-            ((ViewGroup) root).addView(dropdownScrimView, insertIdx);
+            ((ViewGroup) root).addView(dropdownScrimView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
     }
 
@@ -3947,11 +3946,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (dropdownScrimView == null) return;
         dropdownScrimView.animate().cancel();
         if (active) {
+            dropdownScrimView.bringToFront();
+            View topButtons = findViewById(R.id.topButtons);
+            if (topButtons != null) topButtons.bringToFront();
             dropdownScrimView.setVisibility(View.VISIBLE);
             dropdownScrimView.animate().alpha(1f).setDuration(200).start();
             if (heroArtBlur != null) {
                 heroArtBlur.animate().cancel();
                 heroArtBlur.animate().alpha(1f).setDuration(240).start();
+            }
+            if (grid != null) {
+                grid.animate().cancel();
+                grid.animate().alpha(0.08f).setDuration(200).start();
+            }
+            if (hero != null) {
+                hero.animate().cancel();
+                hero.animate().alpha(0.08f).setDuration(200).start();
             }
         } else {
             dropdownScrimView.animate().alpha(0f).setDuration(160).withEndAction(() -> {
@@ -3960,6 +3970,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (heroArtBlur != null && !isAmbientIdleMode) {
                 heroArtBlur.animate().cancel();
                 heroArtBlur.animate().alpha(0f).setDuration(200).start();
+            }
+            if (grid != null) {
+                grid.animate().cancel();
+                grid.animate().alpha(1f).setDuration(200).start();
+            }
+            if (hero != null) {
+                hero.animate().cancel();
+                hero.animate().alpha(1f).setDuration(200).start();
             }
         }
     }
@@ -4427,7 +4445,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (hero != null) {
             hero.animate().cancel();
-            hero.animate().alpha(0f).translationY(40f * density).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
+            hero.animate().alpha(0f).translationX(-140f * density).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
         }
         if (openSpotlightContainer != null) openSpotlightContainer.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
         if (glass != null) glass.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
@@ -4559,6 +4577,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (greeting != null) {
             greeting.animate().cancel();
+            greeting.setTranslationY(0f);
+            greeting.setTranslationX(-100f * density);
             greeting.animate()
                     .translationX(0f)
                     .translationY(0f)
@@ -4616,13 +4636,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .start();
         }
 
-        // 5. Hero spotlight text & glass highlight
+        // 5. Hero spotlight text & glass highlight (slides cleanly in from the left side)
         if (hero != null) {
             hero.animate().cancel();
             hero.setVisibility(View.VISIBLE);
-            hero.setTranslationY(80f * density);
+            hero.setTranslationY(0f);
+            hero.setTranslationX(-140f * density);
             hero.setAlpha(0f);
             hero.animate()
+                    .translationX(0f)
                     .translationY(0f)
                     .alpha(1f)
                     .setDuration(WAKE_ANIM_MS)
