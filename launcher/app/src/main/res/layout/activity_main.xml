@@ -3,6 +3,8 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:background="#FF000000">
 
     <!-- Time-of-day backdrop, drawn once a minute (config.xml sky_intensity; 0 keeps it hidden). -->
@@ -12,27 +14,59 @@
         android:layout_height="match_parent"
         android:importantForAccessibility="no" />
 
-    <!-- Cinematic top shelf (cinematic_home): the focused dock app's artwork, a few pixels across and
-         stretched over the screen, which softens it like a blur without the cost of one. Hidden otherwise. -->
+    <!-- Static Sharp Wallpaper & Pre-Rendered Frosted Blur Wallpaper for Android 11+ Ambient Mode -->
     <ImageView
         android:id="@+id/heroArt"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:scaleType="fitXY"
+        android:src="@drawable/bg_wallpaper"
+        android:scaleType="centerCrop"
+        android:importantForAccessibility="no" />
+
+    <ImageView
+        android:id="@+id/heroArtBlur"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:src="@drawable/bg_wallpaper_blur"
+        android:scaleType="centerCrop"
+        android:alpha="0"
+        android:importantForAccessibility="no" />
+
+    <ImageView
+        android:id="@+id/heroArtNext"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
         android:alpha="0"
         android:visibility="gone"
         android:importantForAccessibility="no" />
 
-    <!-- Ambient glow in the colour of the focused dock app. -->
+    <View
+        android:id="@+id/scrimOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_cinematic_scrim"
+        android:importantForAccessibility="no" />
+
+    <!-- Borderless Full-Screen Frosted Glass Overlay for 5-Min Idle Ambient Mode -->
+    <View
+        android:id="@+id/ambientGlassPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_ambient_glass_fullscreen"
+        android:alpha="0"
+        android:visibility="gone"
+        android:importantForAccessibility="no" />
+
+    <!-- Suppressed full-screen ambient flood (accent color is now clamped strictly inside DockDecoration). -->
     <View
         android:id="@+id/ambient"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:alpha="0" />
+        android:alpha="0"
+        android:visibility="gone" />
 
-    <!-- Race-weekend panel (a theme's race_calendar, see RaceWeekend): in the free space under the clock,
-         shown only from shortly before a weekend's first session until the race is over. Updated once a
-         minute with the clock, never animated. -->
+    <!-- Race-weekend panel -->
     <LinearLayout
         android:id="@+id/racePanel"
         android:layout_width="wrap_content"
@@ -51,7 +85,6 @@
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
-            <!-- A short kerb-red bar, the panel's one accent. -->
             <View
                 android:layout_width="3dp"
                 android:layout_height="13dp"
@@ -94,8 +127,7 @@
             android:letterSpacing="0.12" />
     </LinearLayout>
 
-    <!-- Cinematic top shelf: darkens the edge behind the shelf and the lower half, so the text and the
-         dock stay readable over the artwork. -->
+    <!-- Cinematic top shelf scrim -->
     <View
         android:id="@+id/heroScrim"
         android:layout_width="match_parent"
@@ -103,7 +135,7 @@
         android:visibility="gone"
         android:importantForAccessibility="no" />
 
-    <!-- Top shelf: the focused dock app's name, positioned above the dock in code. -->
+    <!-- Top shelf: the focused dock app's name or active top capsule tool label -->
     <LinearLayout
         android:id="@+id/hero"
         android:layout_width="wrap_content"
@@ -123,7 +155,6 @@
             android:includeFontPadding="false"
             android:singleLine="true" />
 
-        <!-- Cinematic shelf only: when the app was last opened, and the dock position dots. -->
         <TextView
             android:id="@+id/heroMeta"
             android:layout_width="wrap_content"
@@ -146,6 +177,61 @@
             android:visibility="gone" />
     </LinearLayout>
 
+    <!-- Disabled Spotlight Container -->
+    <LinearLayout
+        android:id="@+id/openSpotlightContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginEnd="48dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:elevation="20dp"
+        android:orientation="vertical"
+        android:gravity="end"
+        android:visibility="gone"
+        android:clipChildren="false"
+        android:clipToPadding="false">
+
+        <TextView
+            android:id="@+id/tvHeroSource"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#99FFFFFF"
+            android:textSize="11sp"
+            android:fontFamily="@string/font_medium"
+            android:letterSpacing="0.20"
+            android:textAllCaps="true" />
+
+        <TextView
+            android:id="@+id/tvHeroTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:textColor="#FFFFFFFF"
+            android:textSize="32sp"
+            android:fontFamily="@string/font_light"
+            android:letterSpacing="-0.01"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/spotlightController"
+            style="@style/TopButton"
+            android:layout_marginTop="8dp"
+            android:layout_marginStart="0dp"
+            android:layout_marginEnd="0dp"
+            android:paddingStart="26dp"
+            android:paddingEnd="26dp"
+            android:minWidth="96dp"
+            android:text="Info"
+            android:drawableStart="@null"
+            android:drawableEnd="@null"
+            android:clipToPadding="false"
+            android:nextFocusDown="@+id/grid" />
+    </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
@@ -156,7 +242,6 @@
         android:clipChildren="false"
         android:clipToPadding="false">
 
-        <!-- No clipping down to the pills: with advanced effects a focused pill scales up past its row. -->
         <RelativeLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -169,16 +254,15 @@
                 android:layout_height="wrap_content"
                 android:layout_alignParentStart="true"
                 android:layout_toStartOf="@+id/topButtons"
-                android:layout_marginEnd="16dp"
+                android:layout_marginEnd="28dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
                 android:orientation="vertical">
 
-                <!-- The header texts use gravity left, not start: the launcher lays out left to right
-                     (no supportsRtl), and with start a right-to-left script such as Arabic would move to the
-                     right edge of these full-width lines instead of staying under the clock. -->
                 <TextView
                     android:id="@+id/greeting"
                     android:gravity="left"
-                    android:layout_width="match_parent"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:singleLine="true"
                     android:ellipsize="end"
@@ -193,6 +277,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:baselineAligned="true">
 
                     <TextClock
@@ -238,13 +324,14 @@
                         android:layout_height="wrap_content"
                         android:layout_gravity="bottom"
                         android:layout_marginBottom="9dp"
+                        android:clipChildren="false"
+                        android:clipToPadding="false"
                         android:orientation="vertical">
 
-                        <!-- Shamsi date ("27 Mehr 1405"), shown when shamsi_date is on. -->
                         <TextView
                             android:id="@+id/shamsiDate"
                             android:gravity="left"
-                            android:layout_width="match_parent"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:singleLine="true"
                             android:ellipsize="end"
@@ -258,11 +345,9 @@
                         <TextClock
                             android:id="@+id/date"
                             android:gravity="left"
-                            android:layout_width="match_parent"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:singleLine="@bool/date_single_line"
-                            android:maxLines="2"
-                            android:lineSpacingExtra="6dp"
+                            android:singleLine="true"
                             android:ellipsize="end"
                             android:format12Hour="@string/date_format_home"
                             android:format24Hour="@string/date_format_home"
@@ -272,11 +357,10 @@
                             android:letterSpacing="0.14"
                             android:textAllCaps="true" />
 
-                        <!-- Lunar date ("Lunar 13/9 · Year of the Horse"), shown when lunar_date is on. -->
                         <TextView
                             android:id="@+id/lunarDate"
                             android:gravity="left"
-                            android:layout_width="match_parent"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
                             android:singleLine="true"
@@ -292,8 +376,6 @@
 
             </LinearLayout>
 
-            <!-- Shown only when show_stats is on. Outside leftBlock, so the top buttons stay level with the clock
-                 row; gone, it takes no space. -->
             <TextView
                 android:id="@+id/stats"
                 android:layout_width="wrap_content"
@@ -311,59 +393,189 @@
                 android:focusable="false"
                 android:visibility="gone" />
 
+            <!-- Top Navigation: Pill A (Quick Icons) + Pill B (Settings Button) -->
             <LinearLayout
                 android:id="@+id/topButtons"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="60dp"
                 android:layout_alignParentEnd="true"
                 android:layout_alignBottom="@id/leftBlock"
-                android:layout_marginBottom="6dp"
-                android:clipChildren="false"
-                android:clipToPadding="false"
-                android:orientation="horizontal">
+                android:layout_marginBottom="4dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:clipChildren="true"
+                android:clipToPadding="false">
 
-                <TextView
-                    android:id="@+id/btnInputs"
-                    style="@style/TopButton"
-                    android:text="@string/inputs"
-                    android:drawableStart="@drawable/ic_input"
-                    android:nextFocusDown="@+id/grid" />
+                <!-- Pill A: 5 Equal-Spaced Quick Control Icon Cells (44x44, 4dp gap, 8dp padding all sides) -->
+                <LinearLayout
+                    android:id="@+id/pillQuickControls"
+                    android:layout_width="wrap_content"
+                    android:layout_height="60dp"
+                    android:background="@drawable/bg_top_capsule"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="8dp"
+                    android:paddingTop="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingBottom="8dp"
+                    android:clipChildren="true"
+                    android:clipToPadding="false">
 
-                <TextView
-                    android:id="@+id/btnWifi"
-                    style="@style/TopButton"
-                    android:maxWidth="180dp"
-                    android:singleLine="true"
-                    android:ellipsize="end"
-                    android:text="@string/wifi"
-                    android:drawableStart="@drawable/ic_wifi"
-                    android:nextFocusDown="@+id/grid" />
+                    <!-- 1. Jio Box (HDMI 2) -->
+                    <TextView
+                        android:id="@+id/btnJioBox"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="4dp"
+                        android:gravity="center"
+                        android:focusable="true"
+                        android:clickable="true"
+                        android:background="@drawable/pill_icon_subtle_bg"
+                        android:contentDescription="Jio Box"
+                        android:drawableStart="@drawable/ic_jiobox"
+                        android:drawablePadding="0dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:nextFocusRight="@+id/btnWifi"
+                        android:nextFocusDown="@+id/grid" />
 
-                <TextView
-                    android:id="@+id/btnReorder"
-                    style="@style/TopButtonIcon"
-                    android:contentDescription="@string/reorder"
-                    android:drawableStart="@drawable/ic_swap_vert"
-                    android:nextFocusDown="@+id/grid" />
+                    <!-- 2. Wi-Fi -->
+                    <TextView
+                        android:id="@+id/btnWifi"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="4dp"
+                        android:gravity="center"
+                        android:focusable="true"
+                        android:clickable="true"
+                        android:background="@drawable/pill_icon_subtle_bg"
+                        android:contentDescription="@string/wifi"
+                        android:drawableStart="@drawable/ic_wifi_signal"
+                        android:drawablePadding="0dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:nextFocusLeft="@+id/btnJioBox"
+                        android:nextFocusRight="@+id/btnScreensaver"
+                        android:nextFocusDown="@+id/grid" />
 
-                <TextView
-                    android:id="@+id/btnLibraryTop"
-                    style="@style/TopButtonIcon"
-                    android:visibility="gone"
-                    android:contentDescription="@string/app_library"
-                    android:drawableStart="@drawable/ic_apps_pill"
-                    android:nextFocusDown="@+id/grid" />
+                    <!-- 3. Screensaver -->
+                    <TextView
+                        android:id="@+id/btnScreensaver"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="4dp"
+                        android:gravity="center"
+                        android:focusable="true"
+                        android:clickable="true"
+                        android:background="@drawable/pill_icon_subtle_bg"
+                        android:contentDescription="Screensaver"
+                        android:drawableStart="@drawable/ic_screensaver"
+                        android:drawablePadding="0dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:nextFocusLeft="@+id/btnWifi"
+                        android:nextFocusRight="@+id/btnRam"
+                        android:nextFocusDown="@+id/grid" />
 
-                <TextView
+                    <!-- 4. Free up memory -->
+                    <TextView
+                        android:id="@+id/btnRam"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="4dp"
+                        android:gravity="center"
+                        android:focusable="true"
+                        android:clickable="true"
+                        android:background="@drawable/pill_icon_subtle_bg"
+                        android:contentDescription="Free up memory"
+                        android:drawableStart="@drawable/ic_ram_chip"
+                        android:drawablePadding="0dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:nextFocusLeft="@+id/btnScreensaver"
+                        android:nextFocusRight="@+id/btnPower"
+                        android:nextFocusDown="@+id/grid" />
+
+                    <!-- 5. Turn off now -->
+                    <TextView
+                        android:id="@+id/btnPower"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:gravity="center"
+                        android:focusable="true"
+                        android:clickable="true"
+                        android:background="@drawable/pill_icon_subtle_bg"
+                        android:contentDescription="Turn off now"
+                        android:drawableStart="@drawable/ic_power"
+                        android:drawablePadding="0dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:nextFocusLeft="@+id/btnRam"
+                        android:nextFocusRight="@+id/btnSettings"
+                        android:nextFocusDown="@+id/grid" />
+
+                    <!-- Hidden / Optional buttons preserved for compatibility -->
+                    <TextView
+                        android:id="@+id/btnInputs"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/btnReorder"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/btnLibraryTop"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:visibility="gone" />
+                </LinearLayout>
+
+                <!-- Pill B: Separate Settings Capsule Button (60dp height, 30dp radius, 16dp horizontal padding) -->
+                <LinearLayout
                     android:id="@+id/btnSettings"
-                    style="@style/TopButton"
-                    android:text="@string/settings"
-                    android:drawableStart="@drawable/ic_settings"
-                    android:nextFocusDown="@+id/grid" />
+                    android:layout_width="wrap_content"
+                    android:layout_height="60dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/bg_pill_settings_selector"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:nextFocusLeft="@+id/btnPower"
+                    android:nextFocusDown="@+id/grid"
+                    android:clipChildren="true"
+                    android:clipToPadding="false">
+
+                    <ImageView
+                        android:id="@+id/iconSettings"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:src="@drawable/ic_settings"
+                        android:tint="#FFFFFFFF"
+                        android:importantForAccessibility="no" />
+
+                    <TextView
+                        android:id="@+id/labelSettings"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:fontFamily="@string/font_medium"
+                        android:letterSpacing="0.04"
+                        android:singleLine="true"
+                        android:text="Settings"
+                        android:textColor="#FFFFFFFF"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
             </LinearLayout>
         </RelativeLayout>
 
-        <!-- The wrapper clips at the grid's edge; the grid itself must not clip so scaled tiles can overflow their cells. -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"

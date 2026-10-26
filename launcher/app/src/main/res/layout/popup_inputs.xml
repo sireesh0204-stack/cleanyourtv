@@ -3,10 +3,26 @@
     android:id="@+id/panel"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:background="@drawable/bg_dock_tray"
+    android:elevation="12dp"
     android:orientation="vertical"
-    android:background="@drawable/glass_panel"
-    android:padding="6dp"
-    android:elevation="12dp">
+    android:padding="6dp">
+
+    <TextView
+        android:id="@+id/tvInputsHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="@string/font_medium"
+        android:letterSpacing="0.18"
+        android:paddingStart="14dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="6dp"
+        android:singleLine="true"
+        android:text="INPUTS"
+        android:textAllCaps="true"
+        android:textColor="#80FFFFFF"
+        android:textSize="11sp" />
 
     <LinearLayout
         android:id="@+id/rows"
