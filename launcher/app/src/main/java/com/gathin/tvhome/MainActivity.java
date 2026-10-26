@@ -2,6 +2,10 @@ package com.gathin.tvhome;
 
 import android.app.ActivityManager;
 import android.graphics.BitmapFactory;
+import android.graphics.RenderEffect;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
+import android.widget.TextClock;
 import android.graphics.Typeface;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
@@ -111,49 +115,76 @@ import java.util.Set;
  */
 public class MainActivity extends Activity implements AppAdapter.TileListener {
 
-    // --- GRAFTED TRENDING HERO, RAM BOOSTER, SCREENSAVER ---
+    // --- STATIC WALLPAPER, DOCK ACCENT, TOP CAPSULE & 5-MIN AMBIENT MODE ---
+    private ImageView heroArtBlur;
     private ImageView heroArtNext;
     private View openSpotlightContainer;
     private TextView tvHeroSource;
     private TextView tvHeroTitle;
     private TextView spotlightController;
-    private TextView btnRam;
+    private TextView activeMemoryStatusView;
+    private DockDecoration dockDecoration;
+    private String currentWifiLabel = "";
+    private int sleepTimerMinutes = 0; // Default to Off
+    private final Runnable sleepTimerRunnable = this::triggerDeviceSleepNow;
 
-    private static class HeroItem {
-        final String categoryLabel;
-        final String title;
-        final String backdropUrl;
+    // Direct Input Hardware IDs for OnePlus TV (MediaTek TV Input)
+    private static final String HDMI_JIO_BOX_ID = "com.mediatek.tvinput/.hdmi.HDMIInputService/HW6";
+    private static final String HDMI_GAME_CONSOLE_ID = "com.mediatek.tvinput/.hdmi.HDMIInputService/HW5";
+    private static final String PREF_SLEEP_TIMER_RESET_V2 = "pref_sleep_timer_reset_off_v2";
+    private static final long SETTINGS_AUTO_OPEN_DEBOUNCE_MS = 100L;
 
-        HeroItem(String categoryLabel, String title, String backdropUrl) {
-            this.categoryLabel = categoryLabel;
-            this.title = title;
-            this.backdropUrl = backdropUrl;
-        }
-    }
+    private View dropdownScrimView;
+    private PopupWindow settingsDropdownPopup;
+    private boolean suppressSettingsAutoOpen = false;
+    private boolean isTransferringFocusBetweenPillAndDropdown = false;
 
-    private final List<HeroItem> rotatingHeroQueue = new ArrayList<>();
-    private int currentHeroIndex = 0;
-    private HeroItem activeHeroItem;
-    private final ExecutorService bgExecutor = Executors.newCachedThreadPool();
-    private static final long HERO_ROTATION_MS = 18_000L;
-    private static final long HERO_CROSSFADE_MS = 1_100L;
-    private final Runnable heroRotateRunnable = new Runnable() {
-        @Override
-        public void run() {
-            stepHeroArtwork(1);
-            handler.postDelayed(this, HERO_ROTATION_MS);
+    private final Runnable autoOpenSettingsRunnable = () -> {
+        View btnSettings = findViewById(R.id.btnSettings);
+        if (btnSettings != null && (btnSettings.hasFocus() || btnSettings.isHovered()) && !suppressSettingsAutoOpen) {
+            if (settingsDropdownPopup == null || !settingsDropdownPopup.isShowing()) {
+                showSettingsDropdown(btnSettings);
+            }
         }
     };
 
-    private static final String TRAKT_TRENDING_SHOWS_URL = "https://api.trakt.tv/shows/trending?limit=10";
-    private static final String TRAKT_TRENDING_MOVIES_URL = "https://api.trakt.tv/movies/trending?limit=10";
-    private static final String CINEMETA_TRENDING_SHOWS_URL = "https://v3-cinemeta.strem.io/catalog/series/top/genre=Trending.json";
-    private static final String CINEMETA_TRENDING_MOVIES_URL = "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Trending.json";
-    private static final String KITSU_TRENDING_ANIME_URL = "https://kitsu.io/api/edge/trending/anime?limit=10";
-    private static final String KITSU_TRENDING_ANIME_MOVIES_URL = "https://kitsu.io/api/edge/anime?filter[subtype]=movie&sort=-user_count&page[limit]=10";
+    private final Runnable autoCloseSettingsRunnable = () -> {
+        if (isTransferringFocusBetweenPillAndDropdown) return;
+        View btnSettings = findViewById(R.id.btnSettings);
+        boolean pillHasFocus = btnSettings != null && (btnSettings.hasFocus() || btnSettings.isHovered());
+        boolean dropdownHasFocus = false;
+        if (settingsDropdownPopup != null && settingsDropdownPopup.isShowing()) {
+            View content = settingsDropdownPopup.getContentView();
+            if (content != null && (content.hasFocus() || content.isHovered())) {
+                dropdownHasFocus = true;
+            }
+        }
+        if (!pillHasFocus && !dropdownHasFocus && settingsDropdownPopup != null && settingsDropdownPopup.isShowing()) {
+            settingsDropdownPopup.dismiss();
+        }
+    };
 
-    // RAM Booster state
+    // Top Capsule 120ms Hover Auto-Open State
+    private static final long TOP_CAPSULE_HOVER_DELAY_MS = 120L;
+    private Runnable topCapsuleAutoOpenRunnable;
+    private View suppressNextAutoOpenForView;
+
+    private final ExecutorService bgExecutor = Executors.newCachedThreadPool();
     private boolean isRamBoosting = false;
+
+    // 5-Minute Inactivity Ambient Mode state (1400ms fluid transition)
+    private static final long AMBIENT_IDLE_TIMEOUT_MS = 300_000L; // 5 minutes
+    private static final long AMBIENT_ANIM_MS = 1400L;
+    private boolean isAmbientIdleMode = false;
+    private boolean consumeNextWakeKeyUp = false;
+    private View ambientGlassPanel;
+    private TextClock clockView;
+    private TextClock ampmView;
+    private TextClock dateView;
+    private View clockDividerView;
+    private View topButtonsContainer;
+    private final Runnable ambientIdleRunnable = this::enterAmbientIdleMode;
+    private final Runnable showIdleClock = this::enterAmbientIdleMode;
 
 
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
@@ -176,7 +207,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private long settingsRevision;
     /** Idle time on Home before ClockActivity; 0 is off (config.xml, home_idle_clock_minutes). */
     private long idleClockMs;
-    private final Runnable showIdleClock = () -> startActivity(new Intent(this, ClockActivity.class));
     private String liveTvAction;
     private String liveTvInputId;
     /** The app library is on (config.xml, app_library): only then can the tile menu take an app off Home. */
@@ -422,9 +452,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         public void run() {
             updateGreeting();
             updateRace();
-            // The pill follows the network callbacks and each return to Home; only the diya's flame follows the
-            // signal level, so only it needs this minute's binder calls (about 7 ms on the UI thread).
             if (festive) updateWifiLabel();
+            if (isAmbientIdleMode) applyJapaneseClockShader();
             sky.update();
             wallpaperPlayer.update();
             handler.postDelayed(this, MINUTE_MS);
@@ -484,12 +513,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         glass.setStyle(cfg.glassStyle);
         if (festive) glass.setAccent(festival.accentColor());
         ambient = findViewById(R.id.ambient);
-        // The glow is one bitmap, so its alpha can be applied while drawing it. Otherwise every frame of
-        // a fade renders it into a full-screen offscreen buffer first.
         ambient.forceHasOverlappingRendering(false);
-        ambientGlow = cfg.ambientGlow;
+        ambientGlow = false;
         appGlow = cfg.appGlow;
-        if (!ambientGlow) ambient.setVisibility(View.GONE);
+        ambient.setVisibility(View.GONE);
         heroName = findViewById(R.id.heroName);
         hero = findViewById(R.id.hero);
         // The hero is now a group (name, and the cinematic lines): without this every fade of the default
@@ -498,18 +525,40 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroMeta = findViewById(R.id.heroMeta);
         heroDots = findViewById(R.id.heroDots);
         heroArt = findViewById(R.id.heroArt);
+        heroArtBlur = findViewById(R.id.heroArtBlur);
         heroArtNext = findViewById(R.id.heroArtNext);
         openSpotlightContainer = findViewById(R.id.openSpotlightContainer);
         tvHeroSource = findViewById(R.id.tvHeroSource);
         tvHeroTitle = findViewById(R.id.tvHeroTitle);
         spotlightController = findViewById(R.id.spotlightController);
-        btnRam = findViewById(R.id.btnRam);
+        ambientGlassPanel = findViewById(R.id.ambientGlassPanel);
+        clockView = findViewById(R.id.clock);
+        ampmView = findViewById(R.id.ampm);
+        dateView = findViewById(R.id.date);
+        clockDividerView = findViewById(R.id.clockDivider);
+        topButtonsContainer = findViewById(R.id.topButtons);
 
-        setupSpotlightController();
-        seedFallbackHeroItems();
-        displayHeroAtIndex(0);
-        fetchAllTrendingSourcesAsync();
-        startHeroRotation();
+        // Static Wallpaper & Contrast Scrim (Trakt/Kitsu disabled)
+        if (heroArt != null) {
+            heroArt.setImageResource(R.drawable.bg_wallpaper);
+            heroArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            heroArt.setAlpha(1f);
+            heroArt.setVisibility(View.VISIBLE);
+        }
+        if (heroArtBlur != null) {
+            heroArtBlur.setImageResource(R.drawable.bg_wallpaper_blur);
+            heroArtBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            heroArtBlur.setAlpha(0f);
+            heroArtBlur.setVisibility(View.VISIBLE);
+        }
+        if (heroArtNext != null) heroArtNext.setVisibility(View.GONE);
+        if (openSpotlightContainer != null) openSpotlightContainer.setVisibility(View.GONE);
+        View scrimOverlay = findViewById(R.id.scrimOverlay);
+        if (scrimOverlay != null) {
+            scrimOverlay.setBackgroundResource(R.drawable.bg_cinematic_scrim);
+            scrimOverlay.setVisibility(View.VISIBLE);
+            scrimOverlay.setAlpha(1f);
+        }
         cinematic = cfg.cinematicHome;
         glowStyle = cfg.glowStyle;
         heroDotsShown = cfg.cinematicDots;
@@ -644,8 +693,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             public void onChildViewDetachedFromWindow(@NonNull View v) {
             }
         });
-        if (dockRow) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
-                singleRow, cfg.dockBandAll));
+        if (dockRow) {
+            dockDecoration = new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
+                    singleRow, cfg.dockBandAll);
+            grid.addItemDecoration(dockDecoration);
+        }
         if (cfg.fadeRows) TopFade.attach(grid, 48 * density);
         // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
         if (animations && !reducedMotion) {
@@ -759,124 +811,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         }
 
-        btnInputs = findViewById(R.id.btnInputs);
-        View btnSettings = findViewById(R.id.btnSettings);
-        btnInputs.setOnClickListener(v -> showInputs());
-        btnWifi.setOnClickListener(v -> openNetworkPill());
-        btnWifi.setOnLongClickListener(v -> {
-            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
-            return true;
-        });
-        launcherSettingsButton = cfg.launcherSettingsButton;
-        if (launcherSettingsButton) {
-            ((TextView) btnSettings).setText(R.string.launcher_settings);
-            ((TextView) btnSettings).setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_home_settings_pill, 0, 0, 0);
-        }
-        btnSettings.setOnClickListener(v -> {
-            if (launcherSettingsButton) startActivityForResult(
-                    new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
-            else open(systemIntent(Settings.ACTION_SETTINGS));
-        });
-        btnReorder = findViewById(R.id.btnReorder);
-        btnReorder.setOnClickListener(v -> toggleReorder());
-        btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
-        if (!cfg.showNetworkPill) btnWifi.setVisibility(View.GONE);
-        showInputsPill = cfg.showInputsPill;
-        showInputsMenuRow = cfg.showInputsPill;
-        btnLibraryTop = findViewById(R.id.btnLibraryTop);
-        btnLibraryTop.setOnClickListener(v -> {
-            onLibraryRequested();
-            libraryFromTopBar = true;   // closing it goes back to this button, not to the pill after the last row
-        });
-        btnLibraryTop.setVisibility(cfg.libraryButton && cfg.appLibrary ? View.VISIBLE : View.GONE);
-        addTopBarApps(cfg.topBarApps);
-        iconOnlyButtons = cfg.iconOnlyButtons;
-        topMenu = cfg.topMenu;
-        wifiIconOnly = iconOnlyButtons && cfg.wifiLabelWidth <= 0;
-        if (cfg.wifiStatusColor) {
-            wifiPlainTint = btnWifi.getCompoundDrawableTintList();
-            wifiOnlineTint = getColorStateList(R.color.pill_icon_online);
-            if (cfg.wifiStatusWarnings) {
-                wifiNoInternetTint = getColorStateList(R.color.pill_icon_no_internet);
-                wifiOfflineTint = getColorStateList(R.color.pill_icon_offline);
-            }
-        }
-        if (cfg.topMenu) {
-            // One gear: Inputs and Wi-Fi move into its dropdown. The Wi-Fi pill stays hidden but keeps its
-            // label up to date, which the menu's Wi-Fi row shows.
-            showInputsPill = false;
-            btnInputs.setVisibility(View.GONE);
-            btnWifi.setVisibility(View.GONE);
-            ((TextView) btnSettings).setText(R.string.settings);
-            ((TextView) btnSettings).setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_settings, 0, 0, 0);
-            if (!iconOnlyButtons) makeIconOnly((TextView) btnSettings);
-            btnSettings.setOnClickListener(v -> showTopMenu());
-            // The lone gear sits at the header's middle, not on its bottom line like the row of pills.
-            LinearLayout topButtons = findViewById(R.id.topButtons);
-            RelativeLayout.LayoutParams tlp = (RelativeLayout.LayoutParams) topButtons.getLayoutParams();
-            tlp.addRule(RelativeLayout.ALIGN_TOP, R.id.leftBlock);
-            tlp.bottomMargin = 0;
-            topButtons.setLayoutParams(tlp);
-            topButtons.setGravity(Gravity.CENTER_VERTICAL);
-        }
-        if (iconOnlyButtons) {
-            if (cfg.wifiLabelWidth > 0) btnWifi.setMaxWidth(Math.round(cfg.wifiLabelWidth * density));
-            else makeIconOnly(btnWifi);
-            makeIconOnly((TextView) btnSettings);
-        }
-        if (cfg.iconOnlyInputs) makeIconOnly((TextView) btnInputs);
-        btnSettings.setOnLongClickListener(v -> {
-            showSettingsMenu();
-            return true;
-        });
-
-        // Keep focus on the top bar at its ends and at the top: Android's focus finder would otherwise
-        // jump to a tile far below when there is nothing in that direction.
-        boolean rtlMenuBar = getResources().getBoolean(R.bool.rtl_menu_bar);
-        View.OnKeyListener pillKeys = (v, keyCode, event) -> {
-            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Top bar: move directly down to middle section: [ Info ] pill (no bypassing)
-                if (spotlightController != null && spotlightController.getVisibility() == View.VISIBLE) {
-                    spotlightController.requestFocus();
-                    return true;
-                }
-                focusTile(0);
-                return true;
-            }
-            View firstPill = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam
-                    : (btnInputs != null && btnInputs.getVisibility() == View.VISIBLE ? btnInputs : firstTopButton());
-            int firstButton = firstPill != null ? firstPill.getId() : R.id.btnSettings;
-            int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
-            int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
-        };
-        if (btnRam != null) {
-            btnRam.setOnKeyListener(pillKeys);
-            btnRam.setOnClickListener(v -> performInteractiveRamClean());
-        }
-        btnInputs.setOnKeyListener(pillKeys);
-        btnWifi.setOnKeyListener(pillKeys);
-        btnSettings.setOnKeyListener(pillKeys);
-        btnReorder.setOnKeyListener(pillKeys);
-        btnLibraryTop.setOnKeyListener(pillKeys);
-        for (View button : topAppButtons) button.setOnKeyListener(pillKeys);
-        List<View> pills = new ArrayList<>(Arrays.asList(btnRam, btnInputs, btnWifi, btnReorder, btnLibraryTop, btnSettings));
-        pills.addAll(topAppButtons);
-        for (View button : pills) {
-            if (button == null) continue;
-            button.setOnFocusChangeListener((view, focused) -> {
-                if (advancedEffects) {
-                    view.animate()
-                            .scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
-                            .setDuration(reducedMotion ? Motion.REDUCED_MS : 160).start();
-                }
-                if (focused) transitionHeroLabel("App Drawer");
-            });
-        }
-        if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
+        setupTopPills();
+        // festive skin handled per capsule
 
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
@@ -1007,8 +943,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onResume() {
         super.onResume();
-        updateRamPill(false, 0L);
-        startHeroRotation();
+
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1217,14 +1152,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void restartIdleClock() {
         root.removeCallbacks(showIdleClock);
-        if (idleClockMs > 0) root.postDelayed(showIdleClock, idleClockMs);
+        root.removeCallbacks(ambientIdleRunnable);
+        long timeoutMs = idleClockMs > 0 ? idleClockMs : AMBIENT_IDLE_TIMEOUT_MS;
+        if (!isAmbientIdleMode) {
+            root.postDelayed(ambientIdleRunnable, timeoutMs);
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        stopHeroRotation();
         root.removeCallbacks(showIdleClock);
+        root.removeCallbacks(ambientIdleRunnable);
+        if (isAmbientIdleMode) exitAmbientIdleMode();
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
         stopAmbientAnimation();
@@ -1330,6 +1270,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (isAmbientIdleMode) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                consumeNextWakeKeyUp = true;
+                exitAmbientIdleMode();
+                restartIdleClock();
+            }
+            return true;
+        }
+        if (consumeNextWakeKeyUp) {
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                consumeNextWakeKeyUp = false;
+            }
+            restartIdleClock();
+            return true;
+        }
+        restartIdleClock();
         if (handleSettingsKey(event)) return true;
         if (tileMenuEnabled && !reordering && openPopup == null && cardPrompt == null
                 && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
@@ -1789,6 +1745,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showHero(int position, float dockTopInRoot) {
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
+        if (dockDecoration != null) dockDecoration.setAccentColor(color);
         float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
         targetHeroLabel = null;
         if (heroName != null) {
@@ -1871,6 +1828,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** The shelf's text for this dock app: its name and, on the cinematic shelf, "Last opened" and the dots. */
     private void fillHero(int position, String label) {
+        if (dockDecoration != null && position >= 0 && position < adapter.appCount()) {
+            dockDecoration.setAccentColor(adapter.ambientColorAt(position));
+        }
         if (heroName != null) {
             heroName.animate().cancel();
             heroName.setAlpha(1f);
@@ -2179,6 +2139,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void hideGlass() {
+        if (dockDecoration != null) dockDecoration.setAccentColor(0);
         if (ambientGlow && ambient != null) ambient.animate().alpha(0f).setDuration(200).start();
         if (!glassShown) return;
         glassShown = false;
@@ -2410,20 +2371,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             if (position < COLUMNS) {
-                // Dock row: move directly to middle section: [ Info ] pill (no bypassing)
-                if (spotlightController != null && spotlightController.getVisibility() == View.VISIBLE) {
-                    spotlightController.requestFocus();
-                    grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
-                    return true;
-                }
-                View topTarget = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam
-                        : (btnInputs != null && btnInputs.getVisibility() == View.VISIBLE ? btnInputs : firstTopButton());
+                View topTarget = firstTopButton();
                 if (topTarget != null) {
                     topTarget.requestFocus();
                     grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
                     return true;
                 }
-                return false;          // fallback to top bar
+                return false;
             }
             target = position - COLUMNS;
         } else {
@@ -2471,12 +2425,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** The first top-bar button after Inputs that is shown, in bar order (top_bar_apps, the network pill, ...); Settings is always there. */
     private View firstTopButton() {
-        ViewGroup bar = findViewById(R.id.topButtons);
-        for (int i = 0; i < bar.getChildCount(); i++) {
-            View button = bar.getChildAt(i);
-            if (button != btnInputs && button.getVisibility() == View.VISIBLE) return button;
+        View btnJioBox = findViewById(R.id.btnJioBox);
+        if (btnJioBox != null && btnJioBox.getVisibility() == View.VISIBLE) {
+            btnJioBox.requestFocus();
+            return btnJioBox;
         }
-        return findViewById(R.id.btnSettings);
+        View btnWifi = findViewById(R.id.btnWifi);
+        if (btnWifi != null && btnWifi.getVisibility() == View.VISIBLE) return btnWifi;
+        View btnSettings = findViewById(R.id.btnSettings);
+        if (btnSettings != null && btnSettings.getVisibility() == View.VISIBLE) return btnSettings;
+        return null;
     }
 
     /** top_bar_apps buttons, in bar order. */
@@ -2822,13 +2780,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             SpannableString label = new SpannableString(text + " " + badge);
             label.setSpan(span, text.length() + 1, label.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             if (!TextUtils.equals(btnWifi.getText(), label)) btnWifi.setText(label);
-        } else if (!TextUtils.equals(btnWifi.getText(), text)) {
-            btnWifi.setText(text);
-        }
-        if (wifiIconOnly) {
-            btnWifi.setContentDescription(btnWifi.getText());
+        } else {
+            // Pill A Wi-Fi cell is strictly icon-only: never draw text into the 44dp cell
             btnWifi.setText(null);
         }
+        currentWifiLabel = text;
+        btnWifi.setContentDescription(text);
+        btnWifi.setText(null);
         if (festive && diya != null) {
             if (online && flame == 0) flame = 3;   // online some other way (cellular, USB tethering)
             diya.setSteady(steady);
@@ -2836,7 +2794,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         } else {
             if (icon != wifiIcon) {
                 wifiIcon = icon;
-                btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+                int iconPx = Math.round(24 * density);
+                Drawable d = getDrawable(icon == R.drawable.ic_wifi ? R.drawable.ic_wifi_signal : icon);
+                if (d != null) {
+                    d.setBounds(0, 0, iconPx, iconPx);
+                    btnWifi.setCompoundDrawables(d, null, null, null);
+                }
             }
             ColorStateList tint = online ? wifiOnlineTint : wifiPlainTint;
             // wifi_status_warnings: orange while connected but not validated (a captive portal), red while offline.
@@ -3263,6 +3226,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
+        attachCapsuleDropdownKeyNavigation(rows, popup, anchor);
 
         int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
         dropIn(popup, panel, anchor, alignment);
@@ -3639,438 +3603,662 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     // =========================================================================
-    // GRAFTED METHODS: TRENDING HERO CAROUSEL, RAM CLEANER, 5-MIN SCREENSAVER
+    // TOP CAPSULE AUTO-OPEN, SETTINGS DROPDOWN, RAM CLEANER & 5-MIN AMBIENT MODE
     // =========================================================================
 
-    private void setupSpotlightController() {
-        if (spotlightController == null) return;
-        if (openSpotlightContainer != null) {
-            openSpotlightContainer.bringToFront();
+    private List<View> getVisibleTopCapsuleButtons() {
+        List<View> visible = new ArrayList<>(3);
+        if (btnInputs != null && btnInputs.getVisibility() == View.VISIBLE) visible.add(btnInputs);
+        if (btnWifi != null && btnWifi.getVisibility() == View.VISIBLE) visible.add(btnWifi);
+        View btnSettings = findViewById(R.id.btnSettings);
+        if (btnSettings != null && btnSettings.getVisibility() == View.VISIBLE) visible.add(btnSettings);
+        return visible;
+    }
+
+    private View getAdjacentTopCapsuleButton(View current, int direction) {
+        List<View> visible = getVisibleTopCapsuleButtons();
+        int idx = visible.indexOf(current);
+        if (idx < 0) return null;
+        boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
+        int step = rtl ? -direction : direction;
+        int targetIdx = idx + step;
+        if (targetIdx >= 0 && targetIdx < visible.size()) {
+            return visible.get(targetIdx);
         }
-        spotlightController.setOnFocusChangeListener((v, focused) -> {
-            if (advancedEffects) {
-                v.animate()
-                        .scaleX(focused ? 1.04f : 1f)
-                        .scaleY(focused ? 1.04f : 1f)
-                        .setDuration(reducedMotion ? Motion.REDUCED_MS : 160)
-                        .start();
-            }
-            if (focused) {
-                transitionHeroLabel("Now Trending");
-            }
-        });
-        spotlightController.setOnKeyListener((v, keyCode, event) -> {
-            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                // Middle section moves UP to top bar - default to first element (Memory / btnRam)
-                View topTarget = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam
-                        : (btnInputs != null && btnInputs.getVisibility() == View.VISIBLE ? btnInputs : firstTopButton());
-                if (topTarget != null) topTarget.requestFocus();
-                return true;
-            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Middle section moves DOWN to dock - default to first element (Stremio at tile 0)
-                focusTile(0);
-                return true;
-            } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                stepHeroArtwork(-1);
-                restartHeroRotationTimer();
-                pulseSpotlightController();
-                return true;
-            } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                stepHeroArtwork(1);
-                restartHeroRotationTimer();
-                pulseSpotlightController();
-                return true;
-            } else if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                if (activeHeroItem != null) {
-                    openTitleInStremio(activeHeroItem.title);
-                }
-                return true;
-            }
-            return false;
-        });
-
-        spotlightController.setOnClickListener(v -> {
-            if (activeHeroItem != null) {
-                openTitleInStremio(activeHeroItem.title);
-            }
-        });
+        return null;
     }
 
-    private void pulseSpotlightController() {
-        if (spotlightController == null) return;
-        spotlightController.animate()
-                .scaleX(1.08f)
-                .scaleY(1.08f)
-                .setDuration(110L)
-                .withEndAction(() -> {
-                    if (spotlightController == null) return;
-                    spotlightController.animate()
-                            .scaleX(spotlightController.hasFocus() ? 1.04f : 1.0f)
-                            .scaleY(spotlightController.hasFocus() ? 1.04f : 1.0f)
-                            .setDuration(140L)
-                            .start();
-                })
-                .start();
-    }
-
-    private void startHeroRotation() {
-        handler.removeCallbacks(heroRotateRunnable);
-        handler.postDelayed(heroRotateRunnable, HERO_ROTATION_MS);
-    }
-
-    private void stopHeroRotation() {
-        handler.removeCallbacks(heroRotateRunnable);
-    }
-
-    private void restartHeroRotationTimer() {
-        handler.removeCallbacks(heroRotateRunnable);
-        handler.postDelayed(heroRotateRunnable, HERO_ROTATION_MS);
-    }
-
-    private void seedFallbackHeroItems() {
-        synchronized (rotatingHeroQueue) {
-            rotatingHeroQueue.clear();
-            rotatingHeroQueue.add(new HeroItem(
-                    "TRAKT TRENDING SERIES",
-                    "Severance",
-                    "https://images.metahub.space/background/large/tt11280740/img"));
-            rotatingHeroQueue.add(new HeroItem(
-                    "TRAKT TRENDING MOVIES",
-                    "Dune: Part Two",
-                    "https://images.metahub.space/background/large/tt15239678/img"));
-            rotatingHeroQueue.add(new HeroItem(
-                    "KITSU TRENDING ANIME MOVIES",
-                    "Your Name.",
-                    "https://images.metahub.space/background/large/tt5311514/img"));
-            rotatingHeroQueue.add(new HeroItem(
-                    "KITSU TRENDING ANIME SERIES OF THE WEEK",
-                    "Solo Leveling",
-                    "https://images.metahub.space/background/large/tt21209876/img"));
+    private void cancelTopCapsuleAutoOpen() {
+        if (topCapsuleAutoOpenRunnable != null) {
+            handler.removeCallbacks(topCapsuleAutoOpenRunnable);
+            topCapsuleAutoOpenRunnable = null;
         }
     }
 
-    private void stepHeroArtwork(int delta) {
-        int nextIdx;
-        synchronized (rotatingHeroQueue) {
-            if (rotatingHeroQueue.isEmpty()) return;
-            int size = rotatingHeroQueue.size();
-            currentHeroIndex = ((currentHeroIndex + delta) % size + size) % size;
-            nextIdx = currentHeroIndex;
+    private void scheduleTopCapsuleAutoOpen(View button) {
+        cancelTopCapsuleAutoOpen();
+        if (button == null) return;
+        if (suppressNextAutoOpenForView == button) {
+            suppressNextAutoOpenForView = null;
+            return;
         }
-        displayHeroAtIndex(nextIdx);
-    }
-
-    private void displayHeroAtIndex(int index) {
-        final HeroItem item;
-        synchronized (rotatingHeroQueue) {
-            if (rotatingHeroQueue.isEmpty()) return;
-            int total = rotatingHeroQueue.size();
-            currentHeroIndex = ((index % total) + total) % total;
-            item = rotatingHeroQueue.get(currentHeroIndex);
-        }
-
-        activeHeroItem = item;
-        if (tvHeroSource != null) tvHeroSource.setText(item.categoryLabel);
-        if (tvHeroTitle != null) tvHeroTitle.setText(item.title);
-
-        bgExecutor.execute(() -> {
-            Bitmap bmp = downloadScaledBitmap(item.backdropUrl, 1280, 720);
-            if (bmp != null) {
-                handler.post(() -> crossfadeBackdrop(bmp));
+        topCapsuleAutoOpenRunnable = () -> {
+            if (isFinishing() || isDestroyed() || isAmbientIdleMode || !button.hasFocus()) return;
+            if (openPopup != null) openPopup.dismiss();
+            int id = button.getId();
+            if (id == R.id.btnInputs) {
+                showInputs();
+            } else if (id == R.id.btnWifi) {
+                showWifiCenteredPanel();
+            } else if (id == R.id.btnSettings) {
+                showSettingsDropdown(button);
             }
-        });
+        };
+        handler.postDelayed(topCapsuleAutoOpenRunnable, TOP_CAPSULE_HOVER_DELAY_MS);
     }
 
-    private void crossfadeBackdrop(Bitmap newBitmap) {
-        if (isFinishing() || isDestroyed() || newBitmap == null) return;
-        if (heroArt == null || heroArtNext == null) return;
-
-        heroArtNext.animate().cancel();
-        heroArt.animate().cancel();
-
-        heroArtNext.setImageBitmap(newBitmap);
-        heroArtNext.setAlpha(0f);
-        heroArtNext.setScaleX(1.04f);
-        heroArtNext.setScaleY(1.04f);
-
-        heroArtNext.animate()
-                .alpha(1f)
-                .scaleX(1.0f)
-                .scaleY(1.0f)
-                .setDuration(HERO_CROSSFADE_MS)
-                .setInterpolator(new DecelerateInterpolator())
-                .withEndAction(() -> {
-                    heroArt.setImageBitmap(newBitmap);
-                    heroArt.setAlpha(1f);
-                    heroArtNext.setAlpha(0f);
-                })
-                .start();
-    }
-
-    private void fetchAllTrendingSourcesAsync() {
-        bgExecutor.execute(() -> {
-            List<HeroItem> traktSeries = fetchTraktOrCinemetaTrending(true);
-            List<HeroItem> traktMovies = fetchTraktOrCinemetaTrending(false);
-            List<HeroItem> kitsuMovies = new ArrayList<>();
-            List<HeroItem> kitsuSeries = new ArrayList<>();
-            fetchKitsuTrendingAnime(kitsuMovies, kitsuSeries);
-
-            List<HeroItem> interleaved = new ArrayList<>();
-            int maxLen = Math.max(
-                    Math.max(traktSeries.size(), traktMovies.size()),
-                    Math.max(kitsuMovies.size(), kitsuSeries.size()));
-
-            for (int i = 0; i < maxLen; i++) {
-                if (i < traktSeries.size()) interleaved.add(traktSeries.get(i));
-                if (i < traktMovies.size()) interleaved.add(traktMovies.get(i));
-                if (i < kitsuMovies.size()) interleaved.add(kitsuMovies.get(i));
-                if (i < kitsuSeries.size()) interleaved.add(kitsuSeries.get(i));
-            }
-
-            if (!interleaved.isEmpty()) {
-                synchronized (rotatingHeroQueue) {
-                    rotatingHeroQueue.clear();
-                    rotatingHeroQueue.addAll(interleaved);
-                    currentHeroIndex = 0;
-                }
-                handler.post(() -> displayHeroAtIndex(0));
-            }
-        });
-    }
-
-    private List<HeroItem> fetchTraktOrCinemetaTrending(boolean isSeries) {
-        List<HeroItem> results = new ArrayList<>();
-        String categoryLabel = isSeries ? "TRAKT TRENDING SERIES" : "TRAKT TRENDING MOVIES";
-        String traktUrl = isSeries ? TRAKT_TRENDING_SHOWS_URL : TRAKT_TRENDING_MOVIES_URL;
-        String clientId = "";
-        try {
-            int idRes = getResources().getIdentifier("trakt_client_id", "string", getPackageName());
-            if (idRes != 0) clientId = getString(idRes);
-        } catch (Exception ignored) {
-        }
-
-        if (!TextUtils.isEmpty(clientId)) {
-            try {
-                HttpURLConnection conn = (HttpURLConnection) new URL(traktUrl).openConnection();
-                conn.setConnectTimeout(6000);
-                conn.setReadTimeout(6000);
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("trakt-api-version", "2");
-                conn.setRequestProperty("trakt-api-key", clientId);
-                if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                    String json = readStream(conn.getInputStream());
-                    JSONArray arr = new JSONArray(json);
-                    for (int i = 0; i < arr.length() && results.size() < 6; i++) {
-                        JSONObject entry = arr.getJSONObject(i);
-                        JSONObject media = entry.optJSONObject(isSeries ? "show" : "movie");
-                        if (media == null) continue;
-                        String title = media.optString("title", "");
-                        JSONObject ids = media.optJSONObject("ids");
-                        String imdbId = ids != null ? ids.optString("imdb", "") : "";
-                        if (!TextUtils.isEmpty(title) && !TextUtils.isEmpty(imdbId)) {
-                            String backdropUrl = "https://images.metahub.space/background/large/" + imdbId + "/img";
-                            results.add(new HeroItem(categoryLabel, title, backdropUrl));
+    private void attachCapsuleDropdownKeyNavigation(LinearLayout rows, PopupWindow popup, View activeButton) {
+        if (rows == null) return;
+        int count = rows.getChildCount();
+        int firstFocusableIdx = -1;
+        for (int i = 0; i < count; i++) {
+            View child = rows.getChildAt(i);
+            if (child.isFocusable()) {
+                if (firstFocusableIdx < 0) firstFocusableIdx = i;
+                final boolean isTopItem = (i == firstFocusableIdx);
+                child.setOnKeyListener((v, keyCode, event) -> {
+                    if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                        View prev = getAdjacentTopCapsuleButton(activeButton, -1);
+                        popup.dismiss();
+                        if (prev != null) {
+                            suppressNextAutoOpenForView = null;
+                            prev.requestFocus();
+                        } else if (activeButton != null) {
+                            suppressNextAutoOpenForView = activeButton;
+                            activeButton.requestFocus();
                         }
+                        return true;
                     }
-                }
-                conn.disconnect();
-            } catch (Exception ignored) {
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        View next = getAdjacentTopCapsuleButton(activeButton, 1);
+                        popup.dismiss();
+                        if (next != null) {
+                            suppressNextAutoOpenForView = null;
+                            next.requestFocus();
+                        } else if (activeButton != null) {
+                            suppressNextAutoOpenForView = activeButton;
+                            activeButton.requestFocus();
+                        }
+                        return true;
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_UP && isTopItem) {
+                        suppressNextAutoOpenForView = activeButton;
+                        popup.dismiss();
+                        if (activeButton != null) activeButton.requestFocus();
+                        return true;
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                        suppressNextAutoOpenForView = activeButton;
+                        popup.dismiss();
+                        if (activeButton != null) activeButton.requestFocus();
+                        return true;
+                    }
+                    return false;
+                });
             }
         }
+    }
 
-        if (!results.isEmpty()) return results;
+    private String getTopBarToolLabel(View view) {
+        if (view == null) return "";
+        int id = view.getId();
+        if (id == R.id.btnInputs) return "Inputs";
+        if (id == R.id.btnWifi) {
+            if (!TextUtils.isEmpty(currentWifiLabel)
+                    && !currentWifiLabel.equalsIgnoreCase(getString(R.string.wifi))) {
+                return currentWifiLabel;
+            }
+            return "Wi-Fi";
+        }
+        if (id == R.id.btnSettings) return "Settings";
+        if (id == R.id.btnReorder) return "Reorder Apps";
+        if (id == R.id.btnLibraryTop) return getString(R.string.app_library);
+        CharSequence desc = view.getContentDescription();
+        return !TextUtils.isEmpty(desc) ? desc.toString() : "Settings";
+    }
 
-        String fallbackUrl = isSeries ? CINEMETA_TRENDING_SHOWS_URL : CINEMETA_TRENDING_MOVIES_URL;
+
+    private interface SettingsRowAction {
+        void onClick(TextView statusView);
+    }
+
+    private String getActiveSoundOutputLabel() {
         try {
-            String json = httpGetString(fallbackUrl);
-            if (!TextUtils.isEmpty(json)) {
-                JSONObject root = new JSONObject(json);
-                JSONArray metas = root.optJSONArray("metas");
-                if (metas != null) {
-                    for (int i = 0; i < metas.length() && results.size() < 6; i++) {
-                        JSONObject meta = metas.getJSONObject(i);
-                        String title = meta.optString("name", "");
-                        String imdbId = meta.optString("imdb_id", meta.optString("id", ""));
-                        String background = meta.optString("background", "");
-                        if (TextUtils.isEmpty(background) && !TextUtils.isEmpty(imdbId)) {
-                            background = "https://images.metahub.space/background/large/" + imdbId + "/img";
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                AudioDeviceInfo[] devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+                for (AudioDeviceInfo dev : devices) {
+                    int type = dev.getType();
+                    if (type == AudioDeviceInfo.TYPE_HDMI_ARC
+                            || type == AudioDeviceInfo.TYPE_HDMI_EARC
+                            || type == AudioDeviceInfo.TYPE_HDMI
+                            || type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+                            || type == AudioDeviceInfo.TYPE_AUX_LINE
+                            || type == AudioDeviceInfo.TYPE_LINE_DIGITAL) {
+                        CharSequence prod = dev.getProductName();
+                        if (!TextUtils.isEmpty(prod) && !prod.toString().equalsIgnoreCase(Build.MODEL)) {
+                            return prod.toString();
                         }
-                        if (!TextUtils.isEmpty(title) && !TextUtils.isEmpty(background)) {
-                            results.add(new HeroItem(categoryLabel, title, background));
-                        }
+                        return "Soundbar";
                     }
                 }
             }
         } catch (Exception ignored) {
         }
-        return results;
+        return "Soundbar";
     }
 
-    private void fetchKitsuTrendingAnime(List<HeroItem> outMovies, List<HeroItem> outSeries) {
+    private void triggerDeviceSleepNow() {
         try {
-            String json = httpGetString(KITSU_TRENDING_ANIME_URL);
-            if (!TextUtils.isEmpty(json)) {
-                JSONObject root = new JSONObject(json);
-                JSONArray data = root.optJSONArray("data");
-                if (data != null) {
-                    for (int i = 0; i < data.length(); i++) {
-                        JSONObject item = data.getJSONObject(i);
-                        JSONObject attrs = item.optJSONObject("attributes");
-                        if (attrs == null) continue;
-                        String title = extractKitsuTitle(attrs);
-                        String subtype = attrs.optString("subtype", "TV");
-                        String backdropUrl = extractKitsuBackdrop(attrs);
-                        if (TextUtils.isEmpty(title) || TextUtils.isEmpty(backdropUrl)) continue;
-
-                        if ("movie".equalsIgnoreCase(subtype)) {
-                            if (outMovies.size() < 6) {
-                                outMovies.add(new HeroItem(
-                                        "KITSU TRENDING ANIME MOVIES", title, backdropUrl));
-                            }
-                        } else {
-                            if (outSeries.size() < 6) {
-                                outSeries.add(new HeroItem(
-                                        "KITSU TRENDING ANIME SERIES OF THE WEEK", title, backdropUrl));
-                            }
-                        }
-                    }
-                }
+            Intent sleepIntent = new Intent("android.settings.REQUEST_SET_SLEEP_TIMER");
+            sleepIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (sleepIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(sleepIntent);
+                return;
             }
         } catch (Exception ignored) {
         }
-
-        if (outMovies.size() < 4) {
-            try {
-                String movieJson = httpGetString(KITSU_TRENDING_ANIME_MOVIES_URL);
-                if (!TextUtils.isEmpty(movieJson)) {
-                    JSONObject root = new JSONObject(movieJson);
-                    JSONArray data = root.optJSONArray("data");
-                    if (data != null) {
-                        for (int i = 0; i < data.length() && outMovies.size() < 6; i++) {
-                            JSONObject item = data.getJSONObject(i);
-                            JSONObject attrs = item.optJSONObject("attributes");
-                            if (attrs == null) continue;
-                            String title = extractKitsuTitle(attrs);
-                            String backdropUrl = extractKitsuBackdrop(attrs);
-                            if (!TextUtils.isEmpty(title) && !TextUtils.isEmpty(backdropUrl)) {
-                                outMovies.add(new HeroItem(
-                                        "KITSU TRENDING ANIME MOVIES", title, backdropUrl));
-                            }
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }
-    }
-
-    private String extractKitsuTitle(JSONObject attrs) {
-        JSONObject titles = attrs.optJSONObject("titles");
-        if (titles != null) {
-            String en = titles.optString("en", "");
-            if (!TextUtils.isEmpty(en)) return en;
-            String enJp = titles.optString("en_jp", "");
-            if (!TextUtils.isEmpty(enJp)) return enJp;
-        }
-        return attrs.optString("canonicalTitle", "");
-    }
-
-    private String extractKitsuBackdrop(JSONObject attrs) {
-        JSONObject cover = attrs.optJSONObject("coverImage");
-        if (cover != null) {
-            String original = cover.optString("original", "");
-            if (!TextUtils.isEmpty(original)) return original;
-            String large = cover.optString("large", "");
-            if (!TextUtils.isEmpty(large)) return large;
-        }
-        JSONObject poster = attrs.optJSONObject("posterImage");
-        if (poster != null) {
-            return poster.optString("original", poster.optString("large", ""));
-        }
-        return "";
-    }
-
-    private void openTitleInStremio(String title) {
-        if (TextUtils.isEmpty(title)) return;
-        String stremioPkg = "com.stremio.one";
-        String encodedQuery = Uri.encode(title.trim());
-
         try {
-            Intent searchIntent = new Intent(Intent.ACTION_VIEW,
-                    Uri.parse("stremio:///search?search=" + encodedQuery));
-            searchIntent.setPackage(stremioPkg);
-            searchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(searchIntent);
+            Runtime.getRuntime().exec(new String[]{"input", "keyevent", String.valueOf(KeyEvent.KEYCODE_SLEEP)});
             return;
         } catch (Exception ignored) {
         }
-
         try {
-            Intent pmIntent = getPackageManager().getLeanbackLaunchIntentForPackage(stremioPkg);
-            if (pmIntent == null) {
-                pmIntent = getPackageManager().getLaunchIntentForPackage(stremioPkg);
-            }
-            if (pmIntent != null) {
-                pmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(pmIntent);
-            }
+            Runtime.getRuntime().exec(new String[]{"input", "keyevent", String.valueOf(KeyEvent.KEYCODE_POWER)});
         } catch (Exception ignored) {
+            Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
         }
     }
 
-    private Bitmap downloadScaledBitmap(String urlStr, int targetW, int targetH) {
-        if (TextUtils.isEmpty(urlStr)) return null;
+    // =========================================================================
+    // REDESIGNED TOP PILLS (PILL A + PILL B), OPAQUE DROPDOWN & FULL BLUR SCRIM
+    // =========================================================================
+
+    private void setupTopPills() {
+        // Migrate legacy sleep timer saved state: ensure default is OFF (0)
+        btnInputs = findViewById(R.id.btnInputs);
+        btnWifi = findViewById(R.id.btnWifi);
+        btnReorder = findViewById(R.id.btnReorder);
+        btnLibraryTop = findViewById(R.id.btnLibraryTop);
+        SharedPreferences prefs = getPreferences(Context.MODE_PRIVATE);
+        if (!prefs.getBoolean(PREF_SLEEP_TIMER_RESET_V2, false)) {
+            sleepTimerMinutes = 0;
+            handler.removeCallbacks(sleepTimerRunnable);
+            prefs.edit().putBoolean(PREF_SLEEP_TIMER_RESET_V2, true).putInt("sleep_timer_minutes", 0).apply();
+        }
+
+        // --- Pill A: 5 Equal-Spaced Quick Control Icon Cells ---
+        View btnJioBox = findViewById(R.id.btnJioBox);
+        View btnWifi = findViewById(R.id.btnWifi);
+        View btnScreensaver = findViewById(R.id.btnScreensaver);
+        View btnRam = findViewById(R.id.btnRam);
+        View btnPower = findViewById(R.id.btnPower);
+
+        // 1. Jio Box (HDMI 2 Direct Switch)
+        if (btnJioBox != null) {
+            btnJioBox.setOnClickListener(v -> launchTvInput(HDMI_JIO_BOX_ID, "Jio Box"));
+        }
+
+        // 2. Wi-Fi (Centered modal picker with scrim)
+        if (btnWifi != null) {
+            btnWifi.setOnClickListener(v -> showWifiCenteredPanel());
+            btnWifi.setOnLongClickListener(v -> {
+                open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+                return true;
+            });
+        }
+
+        // 3. Screensaver (Immediate Ambient Mode)
+        if (btnScreensaver != null) {
+            btnScreensaver.setOnClickListener(v -> handler.post(this::enterAmbientIdleMode));
+        }
+
+        // 4. Free up memory (Interactive RAM cleaning with feedback)
+        if (btnRam != null) {
+            btnRam.setOnClickListener(v -> runInteractiveRamCleanToast());
+        }
+
+        // 5. Turn off now (Confirmation dialog first)
+        if (btnPower != null) {
+            btnPower.setOnClickListener(v -> showPowerConfirmDialog());
+        }
+
+        // Setup Pill A subtle focus state & tool labels (No scale-up so highlight stays within cell)
+        View[] pillAIcons = new View[]{btnJioBox, btnWifi, btnScreensaver, btnRam, btnPower};
+        for (View iconView : pillAIcons) {
+            if (iconView == null) continue;
+            iconView.setOnFocusChangeListener((v, hasFocus) -> {
+                v.animate().cancel();
+                if (hasFocus) {
+                    transitionHeroLabel(getTopBarToolLabel(v));
+                }
+            });
+        }
+
+        // --- Pill B: Separate Settings Capsule Button with Gear + Label ---
+        View btnSettings = findViewById(R.id.btnSettings);
+        if (btnSettings != null) {
+            btnSettings.setOnFocusChangeListener((v, hasFocus) -> {
+                handler.removeCallbacks(autoOpenSettingsRunnable);
+                handler.removeCallbacks(autoCloseSettingsRunnable);
+                v.animate().cancel();
+                if (hasFocus) {
+                    transitionHeroLabel("Settings");
+                    handler.postDelayed(autoOpenSettingsRunnable, SETTINGS_AUTO_OPEN_DEBOUNCE_MS);
+                } else {
+                    handler.postDelayed(autoCloseSettingsRunnable, 150L);
+                }
+            });
+
+            btnSettings.setOnHoverListener((v, event) -> {
+                if (event.getAction() == android.view.MotionEvent.ACTION_HOVER_ENTER) {
+                    handler.removeCallbacks(autoOpenSettingsRunnable);
+                    handler.removeCallbacks(autoCloseSettingsRunnable);
+                    handler.postDelayed(autoOpenSettingsRunnable, SETTINGS_AUTO_OPEN_DEBOUNCE_MS);
+                } else if (event.getAction() == android.view.MotionEvent.ACTION_HOVER_EXIT) {
+                    handler.removeCallbacks(autoOpenSettingsRunnable);
+                    handler.postDelayed(autoCloseSettingsRunnable, 150L);
+                }
+                return false;
+            });
+
+            btnSettings.setOnClickListener(v -> {
+                if (settingsDropdownPopup != null && settingsDropdownPopup.isShowing()) {
+                    settingsDropdownPopup.dismiss();
+                } else {
+                    showSettingsDropdown(v);
+                }
+            });
+
+            btnSettings.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    if (settingsDropdownPopup != null && settingsDropdownPopup.isShowing()) {
+                        View content = settingsDropdownPopup.getContentView();
+                        if (content != null) {
+                            LinearLayout rows = content.findViewById(R.id.rows);
+                            if (rows != null && rows.getChildCount() > 0) {
+                                isTransferringFocusBetweenPillAndDropdown = true;
+                                rows.getChildAt(0).requestFocus();
+                                handler.postDelayed(() -> isTransferringFocusBetweenPillAndDropdown = false, 60L);
+                                return true;
+                            }
+                        }
+                    } else {
+                        focusTile(0);
+                        return true;
+                    }
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    if (settingsDropdownPopup != null && settingsDropdownPopup.isShowing()) {
+                        settingsDropdownPopup.dismiss();
+                    }
+                    if (btnPower != null) {
+                        btnPower.requestFocus();
+                        return true;
+                    }
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    return true;
+                }
+                return false;
+            });
+        }
+    }
+
+    private void ensureDropdownScrimView() {
+        if (dropdownScrimView != null) return;
+        dropdownScrimView = new View(this);
+        dropdownScrimView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        dropdownScrimView.setBackgroundColor(Color.argb(102, 0, 0, 0)); // 40% black
+        dropdownScrimView.setAlpha(0f);
+        dropdownScrimView.setVisibility(View.GONE);
+        dropdownScrimView.setFocusable(false);
+        dropdownScrimView.setClickable(true);
+        dropdownScrimView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+
+        dropdownScrimView.setOnClickListener(v -> {
+            if (settingsDropdownPopup != null && settingsDropdownPopup.isShowing()) {
+                settingsDropdownPopup.dismiss();
+            }
+        });
+
+        if (root instanceof ViewGroup) {
+            int insertIdx = ((ViewGroup) root).indexOfChild(findViewById(R.id.topButtons));
+            if (insertIdx < 0) insertIdx = ((ViewGroup) root).getChildCount();
+            ((ViewGroup) root).addView(dropdownScrimView, insertIdx);
+        }
+    }
+
+    private void setDropdownScrimActive(boolean active) {
+        ensureDropdownScrimView();
+        if (dropdownScrimView == null) return;
+        dropdownScrimView.animate().cancel();
+        if (active) {
+            dropdownScrimView.setVisibility(View.VISIBLE);
+            dropdownScrimView.animate().alpha(1f).setDuration(200).start();
+            if (heroArtBlur != null) {
+                heroArtBlur.animate().cancel();
+                heroArtBlur.animate().alpha(1f).setDuration(240).start();
+            }
+        } else {
+            dropdownScrimView.animate().alpha(0f).setDuration(160).withEndAction(() -> {
+                dropdownScrimView.setVisibility(View.GONE);
+            }).start();
+            if (heroArtBlur != null && !isAmbientIdleMode) {
+                heroArtBlur.animate().cancel();
+                heroArtBlur.animate().alpha(0f).setDuration(200).start();
+            }
+        }
+    }
+
+    private void showSettingsDropdown(View anchor) {
+        if (anchor == null || isFinishing() || isDestroyed()) return;
+        if (settingsDropdownPopup != null && settingsDropdownPopup.isShowing()) return;
+
+        View panel = getLayoutInflater().inflate(R.layout.popup_settings, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        int width = (int) (290 * density);
+
+        settingsDropdownPopup = glassPopup(panel, width);
+        settingsDropdownPopup.setFocusable(true);
+        settingsDropdownPopup.setOutsideTouchable(true);
+
+        setDropdownScrimActive(true);
+
+        // 1. Game Console (HDMI 1)
+        addDropdownRowWithIcon(rows, R.drawable.ic_gamepad, "Game Console", "HDMI 1", statusView -> {
+            settingsDropdownPopup.dismiss();
+            launchTvInput(HDMI_GAME_CONSOLE_ID, "Game Console");
+        });
+
+        // 2. Live TV (Tuner / TV Input)
+        addDropdownRowWithIcon(rows, R.drawable.ic_livetv, "Live TV", "Channels", statusView -> {
+            settingsDropdownPopup.dismiss();
+            open(liveTvIntent());
+        });
+
+        // 3. Sound output -> opens system sound settings
+        addDropdownRowWithIcon(rows, R.drawable.ic_volume, "Sound output", getActiveSoundOutputLabel(), statusView -> {
+            settingsDropdownPopup.dismiss();
+            open(systemIntent(Settings.ACTION_SOUND_SETTINGS));
+        });
+
+        // 4. Sleep timer -> Cycles: Off -> 30 min -> 60 min -> 90 min -> Off
+        String sleepStatus = sleepTimerMinutes <= 0 ? "Off" : (sleepTimerMinutes + " min");
+        addDropdownRowWithIcon(rows, R.drawable.ic_timer, "Sleep timer", sleepStatus, statusView -> {
+            if (sleepTimerMinutes == 0) sleepTimerMinutes = 30;
+            else if (sleepTimerMinutes == 30) sleepTimerMinutes = 60;
+            else if (sleepTimerMinutes == 60) sleepTimerMinutes = 90;
+            else sleepTimerMinutes = 0;
+
+            handler.removeCallbacks(sleepTimerRunnable);
+            if (sleepTimerMinutes > 0) {
+                handler.postDelayed(sleepTimerRunnable, sleepTimerMinutes * 60_000L);
+                statusView.setText(sleepTimerMinutes + " min");
+            } else {
+                statusView.setText("Off");
+            }
+            getPreferences(Context.MODE_PRIVATE).edit().putInt("sleep_timer_minutes", sleepTimerMinutes).apply();
+        });
+
+        // 5. Reorder Apps
+        addDropdownRowWithIcon(rows, R.drawable.ic_swap_vert, "Reorder Apps", "", statusView -> {
+            settingsDropdownPopup.dismiss();
+            toggleReorder();
+        });
+
+        // 6. Launcher Settings
+        addDropdownRowWithIcon(rows, R.drawable.ic_home_settings_pill, "Launcher Settings", "", statusView -> {
+            settingsDropdownPopup.dismiss();
+            startActivityForResult(new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
+        });
+
+        // 7. Android Settings
+        addDropdownRowWithIcon(rows, R.drawable.ic_settings_gear, "Android Settings", "", statusView -> {
+            settingsDropdownPopup.dismiss();
+            open(systemIntent(Settings.ACTION_SETTINGS));
+        });
+
+        // D-pad Navigation within Dropdown Rows
+        int childCount = rows.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            final int index = i;
+            View rowView = rows.getChildAt(i);
+            rowView.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP && index == 0) {
+                    isTransferringFocusBetweenPillAndDropdown = true;
+                    View btnSettings = findViewById(R.id.btnSettings);
+                    if (btnSettings != null) btnSettings.requestFocus();
+                    handler.postDelayed(() -> isTransferringFocusBetweenPillAndDropdown = false, 60L);
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    isTransferringFocusBetweenPillAndDropdown = true;
+                    if (settingsDropdownPopup != null) settingsDropdownPopup.dismiss();
+                    View btnPower = findViewById(R.id.btnPower);
+                    if (btnPower != null) btnPower.requestFocus();
+                    handler.postDelayed(() -> isTransferringFocusBetweenPillAndDropdown = false, 60L);
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_BACK) {
+                    if (settingsDropdownPopup != null) settingsDropdownPopup.dismiss();
+                    View btnSettings = findViewById(R.id.btnSettings);
+                    if (btnSettings != null) btnSettings.requestFocus();
+                    return true;
+                }
+                return false;
+            });
+        }
+
+        settingsDropdownPopup.setOnDismissListener(() -> {
+            setDropdownScrimActive(false);
+            if (openPopup == settingsDropdownPopup) openPopup = null;
+            settingsDropdownPopup = null;
+        });
+
+        openPopup = settingsDropdownPopup;
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        int measuredW = Math.max(width, panel.getMeasuredWidth());
+        settingsDropdownPopup.setWidth(measuredW);
+
+        // Position directly below Pill B
+        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END;
+        dropIn(settingsDropdownPopup, panel, anchor, alignment);
+    }
+
+    private TextView addDropdownRowWithIcon(LinearLayout rows, int iconResId, String titleText, String statusText, SettingsRowAction action) {
+        View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+        row.setFocusable(true);
+        row.setClickable(true);
+
+        ImageView icon = row.findViewById(R.id.icon);
+        if (icon != null) {
+            if (iconResId != 0) {
+                icon.setImageResource(iconResId);
+                icon.setVisibility(View.VISIBLE);
+            } else {
+                icon.setVisibility(View.GONE);
+            }
+        }
+        View dot = row.findViewById(R.id.dot);
+        if (dot != null) dot.setVisibility(View.GONE);
+
+        TextView title = row.findViewById(R.id.title);
+        title.setText(titleText);
+
+        TextView status = row.findViewById(R.id.status);
+        if (!TextUtils.isEmpty(statusText)) {
+            status.setText(statusText);
+            status.setVisibility(View.VISIBLE);
+        } else {
+            status.setText("");
+            status.setVisibility(View.GONE);
+        }
+
+        row.setOnFocusChangeListener((v, hasFocus) -> {
+            v.animate().cancel();
+            if (hasFocus) {
+                v.animate().scaleX(1.03f).scaleY(1.03f).setDuration(120).start();
+            } else {
+                v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start();
+            }
+        });
+
+        row.setOnClickListener(v -> {
+            if (action != null) action.onClick(status);
+        });
+
+        rows.addView(row);
+        return status;
+    }
+
+    private void showWifiCenteredPanel() {
+        if (isFinishing() || isDestroyed()) return;
+        View panel = getLayoutInflater().inflate(R.layout.popup_settings, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        TextView header = panel.findViewById(R.id.tvSettingsHeader);
+        if (header != null) header.setText("WI-FI & NETWORK");
+
+        int width = (int) (320 * density);
+        final PopupWindow popup = glassPopup(panel, width);
+        popup.setFocusable(true);
+        popup.setOutsideTouchable(true);
+
+        setDropdownScrimActive(true);
+
+        String netTitle = !TextUtils.isEmpty(currentWifiLabel) ? currentWifiLabel : getString(R.string.wifi);
+        addDropdownRowWithIcon(rows, R.drawable.ic_wifi, "Current Network", netTitle, statusView -> {
+            popup.dismiss();
+            openNetworkPill();
+        });
+
+        addDropdownRowWithIcon(rows, R.drawable.ic_settings_gear, "Network Settings", "Android UI", statusView -> {
+            popup.dismiss();
+            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+        });
+
+        popup.setOnDismissListener(() -> {
+            setDropdownScrimActive(false);
+            if (openPopup == popup) openPopup = null;
+        });
+
+        openPopup = popup;
+        popup.showAtLocation(root, Gravity.CENTER, 0, 0);
+        if (rows.getChildCount() > 0) {
+            rows.getChildAt(0).requestFocus();
+        }
+    }
+
+    private void showPowerConfirmDialog() {
+        if (isFinishing() || isDestroyed()) return;
+        View panel = getLayoutInflater().inflate(R.layout.popup_settings, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        TextView header = panel.findViewById(R.id.tvSettingsHeader);
+        if (header != null) header.setText("TURN OFF TV");
+
+        int width = (int) (300 * density);
+        final PopupWindow popup = glassPopup(panel, width);
+        popup.setFocusable(true);
+        popup.setOutsideTouchable(true);
+
+        setDropdownScrimActive(true);
+
+        addDropdownRowWithIcon(rows, R.drawable.ic_power, "Sleep now", "", statusView -> {
+            popup.dismiss();
+            triggerDeviceSleepNow();
+        });
+
+        addDropdownRowWithIcon(rows, 0, "Cancel", "", statusView -> {
+            popup.dismiss();
+        });
+
+        popup.setOnDismissListener(() -> {
+            setDropdownScrimActive(false);
+            if (openPopup == popup) openPopup = null;
+        });
+
+        openPopup = popup;
+        popup.showAtLocation(root, Gravity.CENTER, 0, 0);
+        if (rows.getChildCount() > 0) {
+            rows.getChildAt(0).requestFocus();
+        }
+    }
+
+    private void runInteractiveRamCleanToast() {
+        if (isRamBoosting) return;
+        isRamBoosting = true;
+        Toast.makeText(this, "Freeing up memory...", Toast.LENGTH_SHORT).show();
+
+        final long freeBeforeMb = getAvailableMemoryMb();
+
+        bgExecutor.execute(() -> {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            PackageManager pm = getPackageManager();
+            String myPkg = getPackageName();
+
+            if (am != null && pm != null) {
+                List<ApplicationInfo> apps = pm.getInstalledApplications(0);
+                for (ApplicationInfo app : apps) {
+                    if (app.packageName.equals(myPkg)) continue;
+                    if ((app.flags & ApplicationInfo.FLAG_SYSTEM) == 0
+                            || (app.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0) {
+                        try {
+                            am.killBackgroundProcesses(app.packageName);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+            }
+
+            System.gc();
+            Runtime.getRuntime().gc();
+
+            try {
+                Thread.sleep(400L);
+            } catch (InterruptedException ignored) {
+            }
+
+            final long freeAfterMb = getAvailableMemoryMb();
+            final long freedAmount = Math.max(0, freeAfterMb - freeBeforeMb);
+
+            handler.post(() -> {
+                String msg = freedAmount > 0
+                        ? String.format(Locale.US, "Freed %d MB (%d MB now available)", freedAmount, freeAfterMb)
+                        : String.format(Locale.US, "%d MB memory available", freeAfterMb);
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+                handler.postDelayed(() -> isRamBoosting = false, 1_500L);
+            });
+        });
+    }
+
+    private void launchTvInput(String inputId, String label) {
         try {
-            HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-            conn.setConnectTimeout(7000);
-            conn.setReadTimeout(7000);
-            conn.setDoInput(true);
-            conn.connect();
-            if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                InputStream is = conn.getInputStream();
-                BitmapFactory.Options opts = new BitmapFactory.Options();
-                opts.inPreferredConfig = Bitmap.Config.RGB_565;
-                Bitmap bmp = BitmapFactory.decodeStream(is, null, opts);
-                is.close();
-                conn.disconnect();
-                return bmp;
+            Uri uri = TvContract.buildChannelUriForPassthroughInput(inputId);
+            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception e) {
+            try {
+                Intent fallback = new Intent(Intent.ACTION_VIEW);
+                fallback.setData(TvContract.buildChannelsUriForInput(inputId));
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(fallback);
+            } catch (Exception ex) {
+                Toast.makeText(this, "Could not switch to " + label, Toast.LENGTH_SHORT).show();
             }
-            conn.disconnect();
-        } catch (Exception ignored) {
         }
-        return null;
     }
 
-    private String httpGetString(String urlStr) {
-        try {
-            HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-            conn.setConnectTimeout(6000);
-            conn.setReadTimeout(6000);
-            conn.connect();
-            if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                String str = readStream(conn.getInputStream());
-                conn.disconnect();
-                return str;
-            }
-            conn.disconnect();
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
-
-    private String readStream(InputStream is) throws Exception {
-        BufferedReader reader = new BufferedReader(new InputStreamReader(is, "UTF-8"));
-        StringBuilder sb = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null) {
-            sb.append(line);
-        }
-        reader.close();
-        return sb.toString();
-    }
-
-    // --- RAM BOOSTER METHODS ---
 
     private long getAvailableMemoryMb() {
         ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
@@ -4080,20 +4268,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return memInfo.availMem / (1024L * 1024L);
     }
 
-    private void updateRamPill(boolean boosted, long boostedFreeMb) {
-        if (btnRam == null) return;
-        long freeMb = boosted ? boostedFreeMb : getAvailableMemoryMb();
-        if (boosted) {
-            btnRam.setText(String.format(Locale.US, "Boosted  %d MB", freeMb));
-        } else {
-            btnRam.setText(String.format(Locale.US, "%d MB", freeMb));
-        }
-    }
-
     private void performInteractiveRamClean() {
-        if (isRamBoosting || btnRam == null) return;
+        if (isRamBoosting) return;
         isRamBoosting = true;
-        btnRam.setText("Cleaning...");
+        if (activeMemoryStatusView != null) {
+            activeMemoryStatusView.setVisibility(View.VISIBLE);
+            activeMemoryStatusView.setText("Cleaning...");
+        }
 
         bgExecutor.execute(() -> {
             ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
@@ -4125,24 +4306,262 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             final long freeAfterMb = getAvailableMemoryMb();
 
             handler.post(() -> {
-                updateRamPill(true, freeAfterMb);
-                btnRam.animate()
-                        .scaleX(1.13f)
-                        .scaleY(1.13f)
-                        .setDuration(150L)
-                        .setInterpolator(new OvershootInterpolator())
-                        .withEndAction(() -> btnRam.animate()
-                                .scaleX(btnRam.hasFocus() ? 1.04f : 1.0f)
-                                .scaleY(btnRam.hasFocus() ? 1.04f : 1.0f)
-                                .setDuration(190L)
-                                .start())
-                        .start();
-
-                handler.postDelayed(() -> {
-                    isRamBoosting = false;
-                    updateRamPill(false, 0L);
-                }, 4_000L);
+                if (activeMemoryStatusView != null) {
+                    activeMemoryStatusView.setText(String.format(Locale.US, "%d MB free", freeAfterMb));
+                }
+                handler.postDelayed(() -> isRamBoosting = false, 2_000L);
             });
         });
+    }
+
+    // --- 5-MINUTE INACTIVITY AMBIENT MODE (1400MS FLUID TRANSITION) ---
+
+    private float getUnshiftedCenterX(View view) {
+        Rect r = new Rect(0, 0, view.getWidth(), view.getHeight());
+        root.offsetDescendantRectToMyCoords(view, r);
+        return r.exactCenterX() - view.getTranslationX();
+    }
+
+    private float getUnshiftedCenterY(View view) {
+        Rect r = new Rect(0, 0, view.getWidth(), view.getHeight());
+        root.offsetDescendantRectToMyCoords(view, r);
+        return r.exactCenterY() - view.getTranslationY();
+    }
+
+    private void applyJapaneseClockShader() {
+        if (clockView == null) return;
+        float w = Math.max(clockView.getWidth(), clockView.getPaint().measureText(clockView.getText().toString()));
+        float h = Math.max(clockView.getHeight(), 1f);
+        // Sakura Cherry Blossom (#FFB7C5), Ruri Deep Lapis (#1E50A2), Yamabuki Gold (#FFAA00), Wisteria Violet (#8B81C3)
+        LinearGradient gradient = new LinearGradient(
+                0f, 0f, Math.max(w, 1f), h * 0.65f,
+                new int[]{0xFFFFB7C5, 0xFF1E50A2, 0xFFFFAA00, 0xFF8B81C3},
+                new float[]{0f, 0.35f, 0.68f, 1f},
+                Shader.TileMode.CLAMP);
+        clockView.getPaint().setShader(gradient);
+        clockView.invalidate();
+    }
+
+    private void clearJapaneseClockShader() {
+        if (clockView == null) return;
+        clockView.getPaint().setShader(null);
+        clockView.setTextColor(0xFFFFFFFF);
+        clockView.invalidate();
+    }
+
+    private void enterAmbientIdleMode() {
+        if (isAmbientIdleMode || isFinishing() || isDestroyed() || root == null || root.getWidth() == 0) return;
+        isAmbientIdleMode = true;
+        cancelTopCapsuleAutoOpen();
+        root.removeCallbacks(ambientIdleRunnable);
+        root.removeCallbacks(showIdleClock);
+        if (openPopup != null) openPopup.dismiss();
+
+        DecelerateInterpolator decel = new DecelerateInterpolator(1.6f);
+        int rootW = root.getWidth();
+        int rootH = root.getHeight();
+        float centerX = rootW / 2f;
+        float centerY = rootH / 2f;
+
+        // 1. Crossfade Pre-Blurred Wallpaper (Android 11+ compatible)
+        if (heroArtBlur != null) {
+            heroArtBlur.animate().cancel();
+            heroArtBlur.setVisibility(View.VISIBLE);
+            heroArtBlur.animate()
+                    .alpha(1f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+
+        // 2. Fade In Borderless Full-Screen Ambient Glass Panel
+        if (ambientGlassPanel != null) {
+            ambientGlassPanel.animate().cancel();
+            ambientGlassPanel.setScaleX(1f);
+            ambientGlassPanel.setScaleY(1f);
+            ambientGlassPanel.setTranslationX(0f);
+            ambientGlassPanel.setTranslationY(0f);
+            ambientGlassPanel.setVisibility(View.VISIBLE);
+            ambientGlassPanel.animate()
+                    .alpha(1f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+
+        // 3. Fade Out UI (grid, topButtons, hero, openSpotlightContainer, glass, clockDivider)
+        if (grid != null) grid.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (topButtonsContainer != null) topButtonsContainer.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (hero != null) hero.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (openSpotlightContainer != null) openSpotlightContainer.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (glass != null) glass.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (clockDividerView != null) clockDividerView.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+
+        // 4. Centered Typography Suite & Japanese Multicolor Clock
+        if (clockBlock != null) clockBlock.bringToFront();
+        float clockScale = 3.0f;
+        float scaledClockHalfH = (clockView != null ? clockView.getHeight() * clockScale : 160f * density) / 2f;
+
+        if (clockView != null) {
+            clockView.animate().cancel();
+            clockView.setPivotX(clockView.getWidth() / 2f);
+            clockView.setPivotY(clockView.getHeight() / 2f);
+            applyJapaneseClockShader();
+
+            float clockBaseX = getUnshiftedCenterX(clockView);
+            float clockBaseY = getUnshiftedCenterY(clockView);
+            clockView.animate()
+                    .translationX(centerX - clockBaseX)
+                    .translationY(centerY - clockBaseY)
+                    .scaleX(clockScale)
+                    .scaleY(clockScale)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+
+        if (ampmView != null && ampmView.getWidth() > 0 && !TextUtils.isEmpty(ampmView.getText())) {
+            ampmView.animate().cancel();
+            ampmView.setPivotX(ampmView.getWidth() / 2f);
+            ampmView.setPivotY(ampmView.getHeight() / 2f);
+            float ampmScale = 1.75f;
+            float clockScaledHalfW = (clockView != null ? clockView.getWidth() * clockScale : 0f) / 2f;
+            float targetAmpmX = centerX + clockScaledHalfW + (18f * density) + (ampmView.getWidth() * ampmScale) / 2f;
+            float targetAmpmY = centerY + scaledClockHalfH - (ampmView.getHeight() * ampmScale) / 2f - (14f * density);
+            float ampmBaseX = getUnshiftedCenterX(ampmView);
+            float ampmBaseY = getUnshiftedCenterY(ampmView);
+            ampmView.animate()
+                    .translationX(targetAmpmX - ampmBaseX)
+                    .translationY(targetAmpmY - ampmBaseY)
+                    .scaleX(ampmScale)
+                    .scaleY(ampmScale)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+
+        if (greeting != null && greeting.getVisibility() == View.VISIBLE) {
+            greeting.animate().cancel();
+            greeting.setPivotX(greeting.getWidth() / 2f);
+            greeting.setPivotY(greeting.getHeight() / 2f);
+            greeting.setLetterSpacing(0.22f);
+            float greetingScale = 1.3f;
+            float targetGreetingY = centerY - scaledClockHalfH - (24f * density) - (greeting.getHeight() * greetingScale) / 2f;
+            float greetingBaseX = getUnshiftedCenterX(greeting);
+            float greetingBaseY = getUnshiftedCenterY(greeting);
+            greeting.animate()
+                    .translationX(centerX - greetingBaseX)
+                    .translationY(targetGreetingY - greetingBaseY)
+                    .scaleX(greetingScale)
+                    .scaleY(greetingScale)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+
+        if (dateView != null && dateView.getVisibility() == View.VISIBLE) {
+            dateView.animate().cancel();
+            dateView.setPivotX(dateView.getWidth() / 2f);
+            dateView.setPivotY(dateView.getHeight() / 2f);
+            float dateScale = 1.3f;
+            float targetDateY = centerY + scaledClockHalfH + (24f * density) + (dateView.getHeight() * dateScale) / 2f;
+            float dateBaseX = getUnshiftedCenterX(dateView);
+            float dateBaseY = getUnshiftedCenterY(dateView);
+            dateView.animate()
+                    .translationX(centerX - dateBaseX)
+                    .translationY(targetDateY - dateBaseY)
+                    .scaleX(dateScale)
+                    .scaleY(dateScale)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+    }
+
+    private void exitAmbientIdleMode() {
+        if (!isAmbientIdleMode) return;
+        isAmbientIdleMode = false;
+
+        DecelerateInterpolator decel = new DecelerateInterpolator(1.6f);
+
+        // 1. Crossfade Out Pre-Blurred Wallpaper
+        if (heroArtBlur != null) {
+            heroArtBlur.animate().cancel();
+            heroArtBlur.animate()
+                    .alpha(0f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+
+        // 2. Fade Out Full-Screen Ambient Glass Panel
+        if (ambientGlassPanel != null) {
+            ambientGlassPanel.animate().cancel();
+            ambientGlassPanel.animate()
+                    .alpha(0f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .withEndAction(() -> {
+                        if (!isAmbientIdleMode && ambientGlassPanel != null) {
+                            ambientGlassPanel.setVisibility(View.GONE);
+                        }
+                    })
+                    .start();
+        }
+
+        // 3. Restore Clock, Greeting, and Date to Top-Left and Clear Shader
+        clearJapaneseClockShader();
+
+        if (clockView != null) {
+            clockView.animate().cancel();
+            clockView.animate()
+                    .translationX(0f)
+                    .translationY(0f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+        if (ampmView != null) {
+            ampmView.animate().cancel();
+            ampmView.animate()
+                    .translationX(0f)
+                    .translationY(0f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+        if (greeting != null) {
+            greeting.animate().cancel();
+            greeting.animate()
+                    .translationX(0f)
+                    .translationY(0f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+        if (dateView != null) {
+            dateView.animate().cancel();
+            dateView.animate()
+                    .translationX(0f)
+                    .translationY(0f)
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .setDuration(AMBIENT_ANIM_MS)
+                    .setInterpolator(decel)
+                    .start();
+        }
+
+        // 4. Fade clockDivider, grid, hero, and topButtons Back In to Alpha 1f
+        if (clockDividerView != null) clockDividerView.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (grid != null) grid.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (topButtonsContainer != null) topButtonsContainer.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (hero != null) hero.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        if (glass != null && glassShown) glass.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
     }
 }

@@ -1,6 +1,7 @@
 package com.gathin.tvhome;
 
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Rect;
@@ -18,7 +19,10 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
     private final float density;
     private final Paint band = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dockAccentPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
+    private int currentAccentColor = 0;
+    private RecyclerView attachedParent;
 
     /** Extra band below the tiles for their names (always_show_names), in px. */
     private final float namesRoom;
@@ -59,6 +63,21 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
         edge.setStyle(Paint.Style.STROKE);
         edge.setStrokeWidth(density);
         edge.setColor(lightGlass ? 0x66FFFFFF : translucent ? 0x26FFFFFF : 0x1FFFFFFF);
+        dockAccentPaint.setStyle(Paint.Style.FILL);
+        dockAccentPaint.setColor(Color.TRANSPARENT);
+    }
+
+    public void setAccentColor(int color) {
+        if (this.currentAccentColor == color) return;
+        this.currentAccentColor = color;
+        if (color == 0) {
+            dockAccentPaint.setColor(Color.TRANSPARENT);
+        } else {
+            dockAccentPaint.setColor((0x38 << 24) | (color & 0x00FFFFFF));
+        }
+        if (attachedParent != null) {
+            attachedParent.invalidate();
+        }
     }
 
     /** Concentric corners: the band's radius is the tiles' radius plus the band's padding around them. */
@@ -78,6 +97,7 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
     @Override
     public void getItemOffsets(@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent,
                                @NonNull RecyclerView.State state) {
+        this.attachedParent = parent;
         int pos = parent.getChildAdapterPosition(view);
         if (pos >= 0 && (singleRow || pos < dockSize)) {
             outRect.top = (int) (6 * density);
@@ -87,6 +107,7 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
 
     @Override
     public void onDraw(@NonNull Canvas c, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
+        this.attachedParent = parent;
         if (!bandVisible) return;
         boolean any = false;
         int cardWidth = 0;
@@ -111,36 +132,25 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
         }
         if (!any) return;
         float pad = 14 * density;
-        // The band can only draw inside the grid, and the first and last dock tiles sit 12dp in from its
-        // edges: a full 14dp at the sides sliced the rounded ends flat (#454). Keep the sides, with the
-        // 1dp edge line, inside the grid; the top and bottom have room.
-        // 22dp at the sides (the grid's 10dp padding makes room): a focused first or last tile grows about 7dp
-        // outwards and still keeps about the band's top margin from its rounded end.
         float sidePad = 22 * density;
         float side = Math.max(0f, Math.min(sidePad, Math.min(rect.left, parent.getWidth() - rect.right) - density));
         float radius = AppAdapter.cornerRadius(cardWidth, density);
         if (evenPadding) {
-            // The same padding on all four sides, so the band's corners are concentric with the tiles' everywhere.
             int inner = parent.getWidth() - parent.getPaddingLeft() - parent.getPaddingRight();
-            // A single row's tiles can run off the screen, so only its top limits the padding; its ends are clamped below.
             float room = (singleRow ? rect.top : Math.min(rect.top, Math.min(rect.left, parent.getWidth() - rect.right))) - density;
             float even = evenPaddingPx(inner, dockSize, cardWidth, room);
             rect.inset(-even, -even);
             radius = radiusPx(radius, even);
         } else {
-            // dock_even_padding off: the band as before, with its fixed 26 dp corners.
             rect.inset(singleRow ? -sidePad : -side, -pad);
             radius = 26 * density;
         }
         if (singleRow) {
-            // Tiles past the screen's edge: the band stops at the grid's edge with its rounded end instead of being
-            // sliced square there.
             rect.left = Math.max(rect.left, density);
             rect.right = Math.min(rect.right, parent.getWidth() - density);
         }
         rect.bottom += namesRoom;
         if (lightGlass && (rect.top != shaderTop || rect.bottom != shaderBottom)) {
-            // Frosted liquid glass: subtle specular top highlight, translucent frosted body, and diffused base
             band.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
                     new int[]{0x4DFFFFFF, 0x24FFFFFF, 0x14FFFFFF},
                     new float[]{0f, 0.40f, 1f},
@@ -149,6 +159,9 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
             shaderBottom = rect.bottom;
         }
         c.drawRoundRect(rect, radius, radius, band);
+        if (currentAccentColor != 0) {
+            c.drawRoundRect(rect, radius, radius, dockAccentPaint);
+        }
         c.drawRoundRect(rect, radius, radius, edge);
     }
 }
