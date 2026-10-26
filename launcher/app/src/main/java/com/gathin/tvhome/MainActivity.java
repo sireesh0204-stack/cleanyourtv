@@ -197,6 +197,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private GlassView glass;
     private View ambient;
     private TextView heroName;
+    private String targetHeroLabel;
     /** The top shelf: heroName, plus the cinematic shelf's "Last opened" line and dock position dots. */
     private View hero;
     private TextView heroMeta;
@@ -841,33 +842,39 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     spotlightController.requestFocus();
                     return true;
                 }
-                focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
+                focusTile(0);
                 return true;
             }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
+            View firstPill = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam
+                    : (btnInputs != null && btnInputs.getVisibility() == View.VISIBLE ? btnInputs : firstTopButton());
+            int firstButton = firstPill != null ? firstPill.getId() : R.id.btnSettings;
             int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
             int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
         };
-        btnInputs.setOnKeyListener(pillKeys);
         if (btnRam != null) {
             btnRam.setOnKeyListener(pillKeys);
             btnRam.setOnClickListener(v -> performInteractiveRamClean());
         }
+        btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
         btnReorder.setOnKeyListener(pillKeys);
         btnLibraryTop.setOnKeyListener(pillKeys);
         for (View button : topAppButtons) button.setOnKeyListener(pillKeys);
-        if (advancedEffects) {
-            List<View> pills = new ArrayList<>(Arrays.asList(btnInputs, btnRam, btnWifi, btnReorder, btnLibraryTop, btnSettings));
-            pills.addAll(topAppButtons);
-            for (View button : pills) {
-                button.setOnFocusChangeListener((view, focused) -> view.animate()
-                        .scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
-                        .setDuration(reducedMotion ? Motion.REDUCED_MS : 160).start());
-            }
+        List<View> pills = new ArrayList<>(Arrays.asList(btnRam, btnInputs, btnWifi, btnReorder, btnLibraryTop, btnSettings));
+        pills.addAll(topAppButtons);
+        for (View button : pills) {
+            if (button == null) continue;
+            button.setOnFocusChangeListener((view, focused) -> {
+                if (advancedEffects) {
+                    view.animate()
+                            .scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
+                            .setDuration(reducedMotion ? Motion.REDUCED_MS : 160).start();
+                }
+                if (focused) transitionHeroLabel("App Drawer");
+            });
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
 
@@ -1222,6 +1229,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         wallpaperPlayer.stop();
         stopAmbientAnimation();
         hero.animate().cancel();
+        if (heroName != null) heroName.animate().cancel();
         ambient.animate().cancel();
         heroArt.animate().cancel();
         handler.removeCallbacks(minuteTick);
@@ -1782,7 +1790,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
         float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
-        boolean changed = !label.contentEquals(heroName.getText());
+        targetHeroLabel = null;
+        if (heroName != null) {
+            heroName.animate().cancel();
+        }
+        boolean changed = heroName != null && (!label.contentEquals(heroName.getText()) || heroName.getAlpha() < 1f);
+        if (heroName != null) {
+            heroName.setAlpha(1f);
+            heroName.setTranslationX(0f);
+        }
         if (cinematic && heroArtAlpha > 0f) showHeroArt(position);
 
         if (!animations || reducedMotion) {
@@ -1844,6 +1860,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 }).start();
             }
         } else {
+            fillHero(position, label);
             hero.setY(y);
             if (openSpotlightContainer != null) {
                 openSpotlightContainer.setY(y - 50 * density);
@@ -1854,10 +1871,55 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** The shelf's text for this dock app: its name and, on the cinematic shelf, "Last opened" and the dots. */
     private void fillHero(int position, String label) {
-        heroName.setText(label);
+        if (heroName != null) {
+            heroName.animate().cancel();
+            heroName.setAlpha(1f);
+            heroName.setTranslationX(0f);
+            heroName.setText(label);
+        }
         if (!cinematic) return;
         updateHeroMeta(position);
         updateHeroDots(position);
+    }
+
+    /** Smoothly transitions heroName when focus moves to the Midsection or Top Bar. */
+    private void transitionHeroLabel(String newLabel) {
+        if (heroName == null || TextUtils.isEmpty(newLabel)) return;
+        if (newLabel.equals(targetHeroLabel)
+                || (targetHeroLabel == null && newLabel.contentEquals(heroName.getText()) && heroName.getAlpha() == 1f)) {
+            return;
+        }
+        targetHeroLabel = newLabel;
+        if (heroMeta != null) heroMeta.setVisibility(View.INVISIBLE);
+        if (heroDots != null) heroDots.setVisibility(View.INVISIBLE);
+        if (hero != null) {
+            hero.animate().cancel();
+            hero.setTranslationX(0f);
+            hero.setAlpha(1f);
+            heroShown = true;
+        }
+        heroName.animate().cancel();
+        if (!animations || reducedMotion) {
+            heroName.setTranslationX(0f);
+            heroName.setAlpha(1f);
+            heroName.setText(newLabel);
+            return;
+        }
+        heroName.animate()
+                .alpha(0f)
+                .translationX(-8 * density)
+                .setDuration(120L)
+                .withEndAction(() -> {
+                    if (heroName == null) return;
+                    heroName.setText(newLabel);
+                    heroName.setTranslationX(8 * density);
+                    heroName.animate()
+                            .alpha(1f)
+                            .translationX(0f)
+                            .setDuration(120L)
+                            .start();
+                })
+                .start();
     }
 
     // ---- cinematic shelf -------------------------------------------------------------------------
@@ -2095,8 +2157,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void hideHero() {
         if (!heroShown) return;
+        targetHeroLabel = null;
         stopAmbientAnimation();
         hero.animate().cancel();
+        if (heroName != null) heroName.animate().cancel();
         ambient.animate().cancel();
         heroArt.animate().cancel();
         heroShown = false;
@@ -2349,6 +2413,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 // Dock row: move directly to middle section: [ Info ] pill (no bypassing)
                 if (spotlightController != null && spotlightController.getVisibility() == View.VISIBLE) {
                     spotlightController.requestFocus();
+                    grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
+                    return true;
+                }
+                View topTarget = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam
+                        : (btnInputs != null && btnInputs.getVisibility() == View.VISIBLE ? btnInputs : firstTopButton());
+                if (topTarget != null) {
+                    topTarget.requestFocus();
                     grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
                     return true;
                 }
@@ -3573,16 +3644,32 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void setupSpotlightController() {
         if (spotlightController == null) return;
+        if (openSpotlightContainer != null) {
+            openSpotlightContainer.bringToFront();
+        }
+        spotlightController.setOnFocusChangeListener((v, focused) -> {
+            if (advancedEffects) {
+                v.animate()
+                        .scaleX(focused ? 1.04f : 1f)
+                        .scaleY(focused ? 1.04f : 1f)
+                        .setDuration(reducedMotion ? Motion.REDUCED_MS : 160)
+                        .start();
+            }
+            if (focused) {
+                transitionHeroLabel("Now Trending");
+            }
+        });
         spotlightController.setOnKeyListener((v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                // Middle section moves UP to top bar
-                View topTarget = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam : btnWifi;
+                // Middle section moves UP to top bar - default to first element (Memory / btnRam)
+                View topTarget = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam
+                        : (btnInputs != null && btnInputs.getVisibility() == View.VISIBLE ? btnInputs : firstTopButton());
                 if (topTarget != null) topTarget.requestFocus();
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Middle section moves DOWN to dock
-                focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
+                // Middle section moves DOWN to dock - default to first element (Stremio at tile 0)
+                focusTile(0);
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                 stepHeroArtwork(-1);
@@ -3613,14 +3700,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void pulseSpotlightController() {
         if (spotlightController == null) return;
         spotlightController.animate()
-                .scaleX(1.10f)
-                .scaleY(1.10f)
+                .scaleX(1.08f)
+                .scaleY(1.08f)
                 .setDuration(110L)
-                .withEndAction(() -> spotlightController.animate()
-                        .scaleX(spotlightController.hasFocus() ? 1.04f : 1.0f)
-                        .scaleY(spotlightController.hasFocus() ? 1.04f : 1.0f)
-                        .setDuration(140L)
-                        .start())
+                .withEndAction(() -> {
+                    if (spotlightController == null) return;
+                    spotlightController.animate()
+                            .scaleX(spotlightController.hasFocus() ? 1.04f : 1.0f)
+                            .scaleY(spotlightController.hasFocus() ? 1.04f : 1.0f)
+                            .setDuration(140L)
+                            .start();
+                })
                 .start();
     }
 
