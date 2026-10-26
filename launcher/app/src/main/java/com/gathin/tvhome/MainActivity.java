@@ -1,5 +1,20 @@
 package com.gathin.tvhome;
 
+import android.app.ActivityManager;
+import android.graphics.BitmapFactory;
+import android.graphics.Typeface;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
@@ -95,6 +110,51 @@ import java.util.Set;
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
 public class MainActivity extends Activity implements AppAdapter.TileListener {
+
+    // --- GRAFTED TRENDING HERO, RAM BOOSTER, SCREENSAVER ---
+    private ImageView heroArtNext;
+    private View openSpotlightContainer;
+    private TextView tvHeroSource;
+    private TextView tvHeroTitle;
+    private TextView spotlightController;
+    private TextView btnRam;
+
+    private static class HeroItem {
+        final String categoryLabel;
+        final String title;
+        final String backdropUrl;
+
+        HeroItem(String categoryLabel, String title, String backdropUrl) {
+            this.categoryLabel = categoryLabel;
+            this.title = title;
+            this.backdropUrl = backdropUrl;
+        }
+    }
+
+    private final List<HeroItem> rotatingHeroQueue = new ArrayList<>();
+    private int currentHeroIndex = 0;
+    private HeroItem activeHeroItem;
+    private final ExecutorService bgExecutor = Executors.newCachedThreadPool();
+    private static final long HERO_ROTATION_MS = 18_000L;
+    private static final long HERO_CROSSFADE_MS = 1_100L;
+    private final Runnable heroRotateRunnable = new Runnable() {
+        @Override
+        public void run() {
+            stepHeroArtwork(1);
+            handler.postDelayed(this, HERO_ROTATION_MS);
+        }
+    };
+
+    private static final String TRAKT_TRENDING_SHOWS_URL = "https://api.trakt.tv/shows/trending?limit=10";
+    private static final String TRAKT_TRENDING_MOVIES_URL = "https://api.trakt.tv/movies/trending?limit=10";
+    private static final String CINEMETA_TRENDING_SHOWS_URL = "https://v3-cinemeta.strem.io/catalog/series/top/genre=Trending.json";
+    private static final String CINEMETA_TRENDING_MOVIES_URL = "https://v3-cinemeta.strem.io/catalog/movie/top/genre=Trending.json";
+    private static final String KITSU_TRENDING_ANIME_URL = "https://kitsu.io/api/edge/trending/anime?limit=10";
+    private static final String KITSU_TRENDING_ANIME_MOVIES_URL = "https://kitsu.io/api/edge/anime?filter[subtype]=movie&sort=-user_count&page[limit]=10";
+
+    // RAM Booster state
+    private boolean isRamBoosting = false;
+
 
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
     /** Sent by QuickSettingsActivity: open Launcher settings from here so Home rebuilds when they close. */
@@ -437,6 +497,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         heroMeta = findViewById(R.id.heroMeta);
         heroDots = findViewById(R.id.heroDots);
         heroArt = findViewById(R.id.heroArt);
+        heroArtNext = findViewById(R.id.heroArtNext);
+        openSpotlightContainer = findViewById(R.id.openSpotlightContainer);
+        tvHeroSource = findViewById(R.id.tvHeroSource);
+        tvHeroTitle = findViewById(R.id.tvHeroTitle);
+        spotlightController = findViewById(R.id.spotlightController);
+        btnRam = findViewById(R.id.btnRam);
+
+        setupSpotlightController();
+        seedFallbackHeroItems();
+        displayHeroAtIndex(0);
+        fetchAllTrendingSourcesAsync();
+        startHeroRotation();
         cinematic = cfg.cinematicHome;
         glowStyle = cfg.glowStyle;
         heroDotsShown = cfg.cinematicDots;
@@ -764,7 +836,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Back to the dock tile Up came from, not wherever the focus finder lands.
+                // Top bar: move directly down to middle section: [ Info ] pill (no bypassing)
+                if (spotlightController != null && spotlightController.getVisibility() == View.VISIBLE) {
+                    spotlightController.requestFocus();
+                    return true;
+                }
                 focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
                 return true;
             }
@@ -775,13 +851,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
         };
         btnInputs.setOnKeyListener(pillKeys);
+        if (btnRam != null) {
+            btnRam.setOnKeyListener(pillKeys);
+            btnRam.setOnClickListener(v -> performInteractiveRamClean());
+        }
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
         btnReorder.setOnKeyListener(pillKeys);
         btnLibraryTop.setOnKeyListener(pillKeys);
         for (View button : topAppButtons) button.setOnKeyListener(pillKeys);
         if (advancedEffects) {
-            List<View> pills = new ArrayList<>(Arrays.asList(btnInputs, btnWifi, btnReorder, btnLibraryTop, btnSettings));
+            List<View> pills = new ArrayList<>(Arrays.asList(btnInputs, btnRam, btnWifi, btnReorder, btnLibraryTop, btnSettings));
             pills.addAll(topAppButtons);
             for (View button : pills) {
                 button.setOnFocusChangeListener((view, focused) -> view.animate()
@@ -884,6 +964,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent != null && "com.gathin.tvhome.action.TRIGGER_IDLE".equals(intent.getAction())) {
+            startActivity(new Intent(this, ClockActivity.class));
+            return;
+        }
         if (openLauncherSettingsIfAsked(intent)) return;
         if (openInputsIfAsked(intent)) return;
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
@@ -916,6 +1000,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onResume() {
         super.onResume();
+        updateRamPill(false, 0L);
+        startHeroRotation();
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1030,9 +1116,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             glass.setAlpha(0f);
             heroShown = false;
             hero.setAlpha(0f);
+        if (openSpotlightContainer != null) {
+            openSpotlightContainer.animate().alpha(0f).setDuration(160).start();
+        }
             ambient.setAlpha(0f);
             heroArt.animate().cancel();
-            heroArt.setAlpha(0f);
+            // heroArt.setAlpha(0f);
         }
         if (rebuild) reloadTiles();
         if (animate && entrance && animations && !reducedMotion) {
@@ -1127,6 +1216,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onPause() {
         super.onPause();
+        stopHeroRotation();
         root.removeCallbacks(showIdleClock);
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
@@ -1702,6 +1792,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ambient.animate().cancel();
             fillHero(position, label);
             hero.setY(y);
+            if (openSpotlightContainer != null) {
+                openSpotlightContainer.setY(y - 50 * density);
+                openSpotlightContainer.animate().alpha(1f).setDuration(260).start();
+            }
             hero.setTranslationX(0f);
             hero.setAlpha(1f);
             if (ambientGlow) {
@@ -1718,6 +1812,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ambient.animate().cancel();
             fillHero(position, label);
             hero.setY(y);
+            if (openSpotlightContainer != null) {
+                openSpotlightContainer.setY(y - 50 * density);
+                openSpotlightContainer.animate().alpha(1f).setDuration(260).start();
+            }
             hero.setTranslationX(0f);
             hero.animate().alpha(1f).setDuration(260).start();
             if (ambientGlow) {
@@ -1730,6 +1828,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             hero.animate().alpha(0f).translationX(-12 * density).setDuration(120).withEndAction(() -> {
                 fillHero(position, label);
                 hero.setY(y);
+            if (openSpotlightContainer != null) {
+                openSpotlightContainer.setY(y - 50 * density);
+                openSpotlightContainer.animate().alpha(1f).setDuration(260).start();
+            }
                 hero.setTranslationX(12 * density);
                 hero.animate().alpha(1f).translationX(0f).setDuration(200).start();
             }).start();
@@ -1743,6 +1845,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         } else {
             hero.setY(y);
+            if (openSpotlightContainer != null) {
+                openSpotlightContainer.setY(y - 50 * density);
+                openSpotlightContainer.animate().alpha(1f).setDuration(260).start();
+            }
         }
     }
 
@@ -1964,8 +2070,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         hero.animate().cancel();
         ambient.animate().cancel();
         hero.setAlpha(0f);
+        if (openSpotlightContainer != null) {
+            openSpotlightContainer.animate().alpha(0f).setDuration(160).start();
+        }
         heroArt.animate().cancel();
-        heroArt.setAlpha(0f);
+        // heroArt.setAlpha(0f);
         heroShown = false;
         if (!ambientGlow) return;
         if (!animations || reducedMotion) {
@@ -1997,12 +2106,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             heroArt.animate().alpha(0f).setDuration(300).start();
         } else {
             hero.setAlpha(0f);
+        if (openSpotlightContainer != null) {
+            openSpotlightContainer.animate().alpha(0f).setDuration(160).start();
+        }
             ambient.setAlpha(0f);
-            heroArt.setAlpha(0f);
+            // heroArt.setAlpha(0f);
         }
     }
 
     private void hideGlass() {
+        if (ambientGlow && ambient != null) ambient.animate().alpha(0f).setDuration(200).start();
         if (!glassShown) return;
         glassShown = false;
         glass.animate().cancel();
@@ -2232,7 +2345,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
+            if (position < COLUMNS) {
+                // Dock row: move directly to middle section: [ Info ] pill (no bypassing)
+                if (spotlightController != null && spotlightController.getVisibility() == View.VISIBLE) {
+                    spotlightController.requestFocus();
+                    grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
+                    return true;
+                }
+                return false;          // fallback to top bar
+            }
             target = position - COLUMNS;
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
@@ -3444,5 +3565,494 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             default:
                 return getString(R.string.card_state_new);
         }
+    }
+
+    // =========================================================================
+    // GRAFTED METHODS: TRENDING HERO CAROUSEL, RAM CLEANER, 5-MIN SCREENSAVER
+    // =========================================================================
+
+    private void setupSpotlightController() {
+        if (spotlightController == null) return;
+        spotlightController.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                // Middle section moves UP to top bar
+                View topTarget = btnRam != null && btnRam.getVisibility() == View.VISIBLE ? btnRam : btnWifi;
+                if (topTarget != null) topTarget.requestFocus();
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                // Middle section moves DOWN to dock
+                focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                stepHeroArtwork(-1);
+                restartHeroRotationTimer();
+                pulseSpotlightController();
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                stepHeroArtwork(1);
+                restartHeroRotationTimer();
+                pulseSpotlightController();
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (activeHeroItem != null) {
+                    openTitleInStremio(activeHeroItem.title);
+                }
+                return true;
+            }
+            return false;
+        });
+
+        spotlightController.setOnClickListener(v -> {
+            if (activeHeroItem != null) {
+                openTitleInStremio(activeHeroItem.title);
+            }
+        });
+    }
+
+    private void pulseSpotlightController() {
+        if (spotlightController == null) return;
+        spotlightController.animate()
+                .scaleX(1.10f)
+                .scaleY(1.10f)
+                .setDuration(110L)
+                .withEndAction(() -> spotlightController.animate()
+                        .scaleX(spotlightController.hasFocus() ? 1.04f : 1.0f)
+                        .scaleY(spotlightController.hasFocus() ? 1.04f : 1.0f)
+                        .setDuration(140L)
+                        .start())
+                .start();
+    }
+
+    private void startHeroRotation() {
+        handler.removeCallbacks(heroRotateRunnable);
+        handler.postDelayed(heroRotateRunnable, HERO_ROTATION_MS);
+    }
+
+    private void stopHeroRotation() {
+        handler.removeCallbacks(heroRotateRunnable);
+    }
+
+    private void restartHeroRotationTimer() {
+        handler.removeCallbacks(heroRotateRunnable);
+        handler.postDelayed(heroRotateRunnable, HERO_ROTATION_MS);
+    }
+
+    private void seedFallbackHeroItems() {
+        synchronized (rotatingHeroQueue) {
+            rotatingHeroQueue.clear();
+            rotatingHeroQueue.add(new HeroItem(
+                    "TRAKT TRENDING SERIES",
+                    "Severance",
+                    "https://images.metahub.space/background/large/tt11280740/img"));
+            rotatingHeroQueue.add(new HeroItem(
+                    "TRAKT TRENDING MOVIES",
+                    "Dune: Part Two",
+                    "https://images.metahub.space/background/large/tt15239678/img"));
+            rotatingHeroQueue.add(new HeroItem(
+                    "KITSU TRENDING ANIME MOVIES",
+                    "Your Name.",
+                    "https://images.metahub.space/background/large/tt5311514/img"));
+            rotatingHeroQueue.add(new HeroItem(
+                    "KITSU TRENDING ANIME SERIES OF THE WEEK",
+                    "Solo Leveling",
+                    "https://images.metahub.space/background/large/tt21209876/img"));
+        }
+    }
+
+    private void stepHeroArtwork(int delta) {
+        int nextIdx;
+        synchronized (rotatingHeroQueue) {
+            if (rotatingHeroQueue.isEmpty()) return;
+            int size = rotatingHeroQueue.size();
+            currentHeroIndex = ((currentHeroIndex + delta) % size + size) % size;
+            nextIdx = currentHeroIndex;
+        }
+        displayHeroAtIndex(nextIdx);
+    }
+
+    private void displayHeroAtIndex(int index) {
+        final HeroItem item;
+        synchronized (rotatingHeroQueue) {
+            if (rotatingHeroQueue.isEmpty()) return;
+            int total = rotatingHeroQueue.size();
+            currentHeroIndex = ((index % total) + total) % total;
+            item = rotatingHeroQueue.get(currentHeroIndex);
+        }
+
+        activeHeroItem = item;
+        if (tvHeroSource != null) tvHeroSource.setText(item.categoryLabel);
+        if (tvHeroTitle != null) tvHeroTitle.setText(item.title);
+
+        bgExecutor.execute(() -> {
+            Bitmap bmp = downloadScaledBitmap(item.backdropUrl, 1280, 720);
+            if (bmp != null) {
+                handler.post(() -> crossfadeBackdrop(bmp));
+            }
+        });
+    }
+
+    private void crossfadeBackdrop(Bitmap newBitmap) {
+        if (isFinishing() || isDestroyed() || newBitmap == null) return;
+        if (heroArt == null || heroArtNext == null) return;
+
+        heroArtNext.animate().cancel();
+        heroArt.animate().cancel();
+
+        heroArtNext.setImageBitmap(newBitmap);
+        heroArtNext.setAlpha(0f);
+        heroArtNext.setScaleX(1.04f);
+        heroArtNext.setScaleY(1.04f);
+
+        heroArtNext.animate()
+                .alpha(1f)
+                .scaleX(1.0f)
+                .scaleY(1.0f)
+                .setDuration(HERO_CROSSFADE_MS)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> {
+                    heroArt.setImageBitmap(newBitmap);
+                    heroArt.setAlpha(1f);
+                    heroArtNext.setAlpha(0f);
+                })
+                .start();
+    }
+
+    private void fetchAllTrendingSourcesAsync() {
+        bgExecutor.execute(() -> {
+            List<HeroItem> traktSeries = fetchTraktOrCinemetaTrending(true);
+            List<HeroItem> traktMovies = fetchTraktOrCinemetaTrending(false);
+            List<HeroItem> kitsuMovies = new ArrayList<>();
+            List<HeroItem> kitsuSeries = new ArrayList<>();
+            fetchKitsuTrendingAnime(kitsuMovies, kitsuSeries);
+
+            List<HeroItem> interleaved = new ArrayList<>();
+            int maxLen = Math.max(
+                    Math.max(traktSeries.size(), traktMovies.size()),
+                    Math.max(kitsuMovies.size(), kitsuSeries.size()));
+
+            for (int i = 0; i < maxLen; i++) {
+                if (i < traktSeries.size()) interleaved.add(traktSeries.get(i));
+                if (i < traktMovies.size()) interleaved.add(traktMovies.get(i));
+                if (i < kitsuMovies.size()) interleaved.add(kitsuMovies.get(i));
+                if (i < kitsuSeries.size()) interleaved.add(kitsuSeries.get(i));
+            }
+
+            if (!interleaved.isEmpty()) {
+                synchronized (rotatingHeroQueue) {
+                    rotatingHeroQueue.clear();
+                    rotatingHeroQueue.addAll(interleaved);
+                    currentHeroIndex = 0;
+                }
+                handler.post(() -> displayHeroAtIndex(0));
+            }
+        });
+    }
+
+    private List<HeroItem> fetchTraktOrCinemetaTrending(boolean isSeries) {
+        List<HeroItem> results = new ArrayList<>();
+        String categoryLabel = isSeries ? "TRAKT TRENDING SERIES" : "TRAKT TRENDING MOVIES";
+        String traktUrl = isSeries ? TRAKT_TRENDING_SHOWS_URL : TRAKT_TRENDING_MOVIES_URL;
+        String clientId = "";
+        try {
+            int idRes = getResources().getIdentifier("trakt_client_id", "string", getPackageName());
+            if (idRes != 0) clientId = getString(idRes);
+        } catch (Exception ignored) {
+        }
+
+        if (!TextUtils.isEmpty(clientId)) {
+            try {
+                HttpURLConnection conn = (HttpURLConnection) new URL(traktUrl).openConnection();
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(6000);
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("trakt-api-version", "2");
+                conn.setRequestProperty("trakt-api-key", clientId);
+                if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                    String json = readStream(conn.getInputStream());
+                    JSONArray arr = new JSONArray(json);
+                    for (int i = 0; i < arr.length() && results.size() < 6; i++) {
+                        JSONObject entry = arr.getJSONObject(i);
+                        JSONObject media = entry.optJSONObject(isSeries ? "show" : "movie");
+                        if (media == null) continue;
+                        String title = media.optString("title", "");
+                        JSONObject ids = media.optJSONObject("ids");
+                        String imdbId = ids != null ? ids.optString("imdb", "") : "";
+                        if (!TextUtils.isEmpty(title) && !TextUtils.isEmpty(imdbId)) {
+                            String backdropUrl = "https://images.metahub.space/background/large/" + imdbId + "/img";
+                            results.add(new HeroItem(categoryLabel, title, backdropUrl));
+                        }
+                    }
+                }
+                conn.disconnect();
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (!results.isEmpty()) return results;
+
+        String fallbackUrl = isSeries ? CINEMETA_TRENDING_SHOWS_URL : CINEMETA_TRENDING_MOVIES_URL;
+        try {
+            String json = httpGetString(fallbackUrl);
+            if (!TextUtils.isEmpty(json)) {
+                JSONObject root = new JSONObject(json);
+                JSONArray metas = root.optJSONArray("metas");
+                if (metas != null) {
+                    for (int i = 0; i < metas.length() && results.size() < 6; i++) {
+                        JSONObject meta = metas.getJSONObject(i);
+                        String title = meta.optString("name", "");
+                        String imdbId = meta.optString("imdb_id", meta.optString("id", ""));
+                        String background = meta.optString("background", "");
+                        if (TextUtils.isEmpty(background) && !TextUtils.isEmpty(imdbId)) {
+                            background = "https://images.metahub.space/background/large/" + imdbId + "/img";
+                        }
+                        if (!TextUtils.isEmpty(title) && !TextUtils.isEmpty(background)) {
+                            results.add(new HeroItem(categoryLabel, title, background));
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return results;
+    }
+
+    private void fetchKitsuTrendingAnime(List<HeroItem> outMovies, List<HeroItem> outSeries) {
+        try {
+            String json = httpGetString(KITSU_TRENDING_ANIME_URL);
+            if (!TextUtils.isEmpty(json)) {
+                JSONObject root = new JSONObject(json);
+                JSONArray data = root.optJSONArray("data");
+                if (data != null) {
+                    for (int i = 0; i < data.length(); i++) {
+                        JSONObject item = data.getJSONObject(i);
+                        JSONObject attrs = item.optJSONObject("attributes");
+                        if (attrs == null) continue;
+                        String title = extractKitsuTitle(attrs);
+                        String subtype = attrs.optString("subtype", "TV");
+                        String backdropUrl = extractKitsuBackdrop(attrs);
+                        if (TextUtils.isEmpty(title) || TextUtils.isEmpty(backdropUrl)) continue;
+
+                        if ("movie".equalsIgnoreCase(subtype)) {
+                            if (outMovies.size() < 6) {
+                                outMovies.add(new HeroItem(
+                                        "KITSU TRENDING ANIME MOVIES", title, backdropUrl));
+                            }
+                        } else {
+                            if (outSeries.size() < 6) {
+                                outSeries.add(new HeroItem(
+                                        "KITSU TRENDING ANIME SERIES OF THE WEEK", title, backdropUrl));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (outMovies.size() < 4) {
+            try {
+                String movieJson = httpGetString(KITSU_TRENDING_ANIME_MOVIES_URL);
+                if (!TextUtils.isEmpty(movieJson)) {
+                    JSONObject root = new JSONObject(movieJson);
+                    JSONArray data = root.optJSONArray("data");
+                    if (data != null) {
+                        for (int i = 0; i < data.length() && outMovies.size() < 6; i++) {
+                            JSONObject item = data.getJSONObject(i);
+                            JSONObject attrs = item.optJSONObject("attributes");
+                            if (attrs == null) continue;
+                            String title = extractKitsuTitle(attrs);
+                            String backdropUrl = extractKitsuBackdrop(attrs);
+                            if (!TextUtils.isEmpty(title) && !TextUtils.isEmpty(backdropUrl)) {
+                                outMovies.add(new HeroItem(
+                                        "KITSU TRENDING ANIME MOVIES", title, backdropUrl));
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private String extractKitsuTitle(JSONObject attrs) {
+        JSONObject titles = attrs.optJSONObject("titles");
+        if (titles != null) {
+            String en = titles.optString("en", "");
+            if (!TextUtils.isEmpty(en)) return en;
+            String enJp = titles.optString("en_jp", "");
+            if (!TextUtils.isEmpty(enJp)) return enJp;
+        }
+        return attrs.optString("canonicalTitle", "");
+    }
+
+    private String extractKitsuBackdrop(JSONObject attrs) {
+        JSONObject cover = attrs.optJSONObject("coverImage");
+        if (cover != null) {
+            String original = cover.optString("original", "");
+            if (!TextUtils.isEmpty(original)) return original;
+            String large = cover.optString("large", "");
+            if (!TextUtils.isEmpty(large)) return large;
+        }
+        JSONObject poster = attrs.optJSONObject("posterImage");
+        if (poster != null) {
+            return poster.optString("original", poster.optString("large", ""));
+        }
+        return "";
+    }
+
+    private void openTitleInStremio(String title) {
+        if (TextUtils.isEmpty(title)) return;
+        String stremioPkg = "com.stremio.one";
+        String encodedQuery = Uri.encode(title.trim());
+
+        try {
+            Intent searchIntent = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("stremio:///search?search=" + encodedQuery));
+            searchIntent.setPackage(stremioPkg);
+            searchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(searchIntent);
+            return;
+        } catch (Exception ignored) {
+        }
+
+        try {
+            Intent pmIntent = getPackageManager().getLeanbackLaunchIntentForPackage(stremioPkg);
+            if (pmIntent == null) {
+                pmIntent = getPackageManager().getLaunchIntentForPackage(stremioPkg);
+            }
+            if (pmIntent != null) {
+                pmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(pmIntent);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private Bitmap downloadScaledBitmap(String urlStr, int targetW, int targetH) {
+        if (TextUtils.isEmpty(urlStr)) return null;
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+            conn.setConnectTimeout(7000);
+            conn.setReadTimeout(7000);
+            conn.setDoInput(true);
+            conn.connect();
+            if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                InputStream is = conn.getInputStream();
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inPreferredConfig = Bitmap.Config.RGB_565;
+                Bitmap bmp = BitmapFactory.decodeStream(is, null, opts);
+                is.close();
+                conn.disconnect();
+                return bmp;
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private String httpGetString(String urlStr) {
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(6000);
+            conn.connect();
+            if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                String str = readStream(conn.getInputStream());
+                conn.disconnect();
+                return str;
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private String readStream(InputStream is) throws Exception {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line);
+        }
+        reader.close();
+        return sb.toString();
+    }
+
+    // --- RAM BOOSTER METHODS ---
+
+    private long getAvailableMemoryMb() {
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return 0L;
+        ActivityManager.MemoryInfo memInfo = new ActivityManager.MemoryInfo();
+        am.getMemoryInfo(memInfo);
+        return memInfo.availMem / (1024L * 1024L);
+    }
+
+    private void updateRamPill(boolean boosted, long boostedFreeMb) {
+        if (btnRam == null) return;
+        long freeMb = boosted ? boostedFreeMb : getAvailableMemoryMb();
+        if (boosted) {
+            btnRam.setText(String.format(Locale.US, "Boosted  %d MB", freeMb));
+        } else {
+            btnRam.setText(String.format(Locale.US, "%d MB", freeMb));
+        }
+    }
+
+    private void performInteractiveRamClean() {
+        if (isRamBoosting || btnRam == null) return;
+        isRamBoosting = true;
+        btnRam.setText("Cleaning...");
+
+        bgExecutor.execute(() -> {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            PackageManager pm = getPackageManager();
+            String myPkg = getPackageName();
+
+            if (am != null && pm != null) {
+                List<ApplicationInfo> apps = pm.getInstalledApplications(0);
+                for (ApplicationInfo app : apps) {
+                    if (app.packageName.equals(myPkg)) continue;
+                    if ((app.flags & ApplicationInfo.FLAG_SYSTEM) == 0
+                            || (app.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0) {
+                        try {
+                            am.killBackgroundProcesses(app.packageName);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+            }
+
+            System.gc();
+            Runtime.getRuntime().gc();
+
+            try {
+                Thread.sleep(320L);
+            } catch (InterruptedException ignored) {
+            }
+
+            final long freeAfterMb = getAvailableMemoryMb();
+
+            handler.post(() -> {
+                updateRamPill(true, freeAfterMb);
+                btnRam.animate()
+                        .scaleX(1.13f)
+                        .scaleY(1.13f)
+                        .setDuration(150L)
+                        .setInterpolator(new OvershootInterpolator())
+                        .withEndAction(() -> btnRam.animate()
+                                .scaleX(btnRam.hasFocus() ? 1.04f : 1.0f)
+                                .scaleY(btnRam.hasFocus() ? 1.04f : 1.0f)
+                                .setDuration(190L)
+                                .start())
+                        .start();
+
+                handler.postDelayed(() -> {
+                    isRamBoosting = false;
+                    updateRamPill(false, 0L);
+                }, 4_000L);
+            });
+        });
     }
 }

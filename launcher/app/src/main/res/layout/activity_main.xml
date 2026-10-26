@@ -12,15 +12,27 @@
         android:layout_height="match_parent"
         android:importantForAccessibility="no" />
 
-    <!-- Cinematic top shelf (cinematic_home): the focused dock app's artwork, a few pixels across and
-         stretched over the screen, which softens it like a blur without the cost of one. Hidden otherwise. -->
+    <!-- Full-Screen Dual-Buffered Trending Fanart Background with Scrim -->
     <ImageView
         android:id="@+id/heroArt"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:scaleType="fitXY"
+        android:scaleType="centerCrop"
+        android:importantForAccessibility="no" />
+
+    <ImageView
+        android:id="@+id/heroArtNext"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
         android:alpha="0"
-        android:visibility="gone"
+        android:importantForAccessibility="no" />
+
+    <View
+        android:id="@+id/scrimOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_cinematic_scrim"
         android:importantForAccessibility="no" />
 
     <!-- Ambient glow in the colour of the focused dock app. -->
@@ -144,6 +156,57 @@
             android:layout_marginTop="16dp"
             android:orientation="horizontal"
             android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- Trending Fanart Spotlight Floating Typography & Info Pill on the Right Side -->
+    <LinearLayout
+        android:id="@+id/openSpotlightContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginEnd="68dp"
+        android:orientation="vertical"
+        android:gravity="end"
+        android:clipChildren="false"
+        android:clipToPadding="false">
+
+        <TextView
+            android:id="@+id/tvHeroSource"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="TRAKT TRENDING SERIES"
+            android:textColor="#99FFFFFF"
+            android:textSize="11sp"
+            android:fontFamily="@string/font_medium"
+            android:letterSpacing="0.20"
+            android:textAllCaps="true" />
+
+        <TextView
+            android:id="@+id/tvHeroTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:text="Severance"
+            android:textColor="#FFFFFFFF"
+            android:textSize="32sp"
+            android:fontFamily="@string/font_light"
+            android:letterSpacing="-0.01"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/spotlightController"
+            style="@style/TopButton"
+            android:layout_marginTop="8dp"
+            android:layout_marginStart="0dp"
+            android:layout_marginEnd="0dp"
+            android:paddingStart="26dp"
+            android:paddingEnd="26dp"
+            android:minWidth="96dp"
+            android:text="Info"
+            android:drawableStart="@null"
+            android:drawableEnd="@null"
+            android:clipToPadding="false"
+            android:nextFocusDown="@+id/grid" />
     </LinearLayout>
 
     <LinearLayout
@@ -327,6 +390,13 @@
                     style="@style/TopButton"
                     android:text="@string/inputs"
                     android:drawableStart="@drawable/ic_input"
+                    android:nextFocusDown="@+id/grid" />
+
+                <TextView
+                    android:id="@+id/btnRam"
+                    style="@style/TopButton"
+                    android:text="343 MB"
+                    android:drawableStart="@drawable/ic_ram_chip"
                     android:nextFocusDown="@+id/grid" />
 
                 <TextView

@@ -55,10 +55,10 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
         this.lightGlass = lightGlass;
         this.evenPadding = evenPadding;
         this.bandVisible = bandVisible;
-        band.setColor(translucent ? 0x8C121014 : (Math.round(opacity * 2.55f) << 24) | 0x141416);
+        band.setColor(lightGlass ? 0x2EFFFFFF : translucent ? 0x8C121014 : (Math.round(opacity * 2.55f) << 24) | 0x141416);
         edge.setStyle(Paint.Style.STROKE);
         edge.setStrokeWidth(density);
-        edge.setColor(lightGlass ? 0x38FFFFFF : translucent ? 0x26FFFFFF : 0x1FFFFFFF);
+        edge.setColor(lightGlass ? 0x66FFFFFF : translucent ? 0x26FFFFFF : 0x1FFFFFFF);
     }
 
     /** Concentric corners: the band's radius is the tiles' radius plus the band's padding around them. */
@@ -81,7 +81,7 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
         int pos = parent.getChildAdapterPosition(view);
         if (pos >= 0 && (singleRow || pos < dockSize)) {
             outRect.top = (int) (6 * density);
-            outRect.bottom = (int) (12 * density);
+            outRect.bottom = (int) (40 * density);
         }
     }
 
@@ -140,8 +140,10 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
         }
         rect.bottom += namesRoom;
         if (lightGlass && (rect.top != shaderTop || rect.bottom != shaderBottom)) {
-            // The pills' glass (pill_bg: white, 18% fading to 8%), a little fainter over this much larger area.
-            band.setShader(new LinearGradient(0, rect.top, 0, rect.bottom, 0x24FFFFFF, 0x0DFFFFFF,
+            // Frosted liquid glass: subtle specular top highlight, translucent frosted body, and diffused base
+            band.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
+                    new int[]{0x4DFFFFFF, 0x24FFFFFF, 0x14FFFFFF},
+                    new float[]{0f, 0.40f, 1f},
                     Shader.TileMode.CLAMP));
             shaderTop = rect.top;
             shaderBottom = rect.bottom;
