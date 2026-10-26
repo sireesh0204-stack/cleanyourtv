@@ -81,6 +81,7 @@ import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.animation.AnimationUtils;
 import android.view.animation.LayoutAnimationController;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -174,7 +175,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     // 5-Minute Inactivity Ambient Mode state (1400ms fluid transition)
     private static final long AMBIENT_IDLE_TIMEOUT_MS = 300_000L; // 5 minutes
-    private static final long AMBIENT_ANIM_MS = 1400L;
+    private static final long AMBIENT_ANIM_MS = 850L;
+    private static final long WAKE_ANIM_MS = 750L;
     private boolean isAmbientIdleMode = false;
     private boolean consumeNextWakeKeyUp = false;
     private View ambientGlassPanel;
@@ -453,7 +455,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             updateGreeting();
             updateRace();
             if (festive) updateWifiLabel();
-            if (isAmbientIdleMode) applyJapaneseClockShader();
+            if (isAmbientIdleMode) applyFrostedGlassClockShader();
             sky.update();
             wallpaperPlayer.update();
             handler.postDelayed(this, MINUTE_MS);
@@ -4336,25 +4338,56 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return r.exactCenterY() - view.getTranslationY();
     }
 
-    private void applyJapaneseClockShader() {
+    private void applyFrostedGlassClockShader() {
         if (clockView == null) return;
         float w = Math.max(clockView.getWidth(), clockView.getPaint().measureText(clockView.getText().toString()));
         float h = Math.max(clockView.getHeight(), 1f);
-        // Sakura Cherry Blossom (#FFB7C5), Ruri Deep Lapis (#1E50A2), Yamabuki Gold (#FFAA00), Wisteria Violet (#8B81C3)
+
+        // Frosted liquid glass reflection shader:
+        // Top specular highlight, translucent glass body revealing clear background beneath, icy refraction, specular bottom rim
         LinearGradient gradient = new LinearGradient(
-                0f, 0f, Math.max(w, 1f), h * 0.65f,
-                new int[]{0xFFFFB7C5, 0xFF1E50A2, 0xFFFFAA00, 0xFF8B81C3},
-                new float[]{0f, 0.35f, 0.68f, 1f},
+                0f, 0f, Math.max(w, 1f) * 0.85f, h,
+                new int[]{0xE6FFFFFF, 0x66FFFFFF, 0x55CFE5FF, 0x99FFFFFF},
+                new float[]{0f, 0.35f, 0.70f, 1f},
                 Shader.TileMode.CLAMP);
         clockView.getPaint().setShader(gradient);
+        // Frosted luminous glow halo radiating behind the translucent glass
+        clockView.setShadowLayer(30f * density, 0f, 0f, 0xB3D0E8FF);
         clockView.invalidate();
+
+        if (ampmView != null) {
+            ampmView.setShadowLayer(14f * density, 0f, 0f, 0x80D0E8FF);
+            ampmView.invalidate();
+        }
+        if (greeting != null) {
+            greeting.setShadowLayer(14f * density, 0f, 0f, 0x80D0E8FF);
+            greeting.invalidate();
+        }
+        if (dateView != null) {
+            dateView.setShadowLayer(14f * density, 0f, 0f, 0x80D0E8FF);
+            dateView.invalidate();
+        }
     }
 
-    private void clearJapaneseClockShader() {
+    private void clearFrostedGlassClockShader() {
         if (clockView == null) return;
         clockView.getPaint().setShader(null);
         clockView.setTextColor(0xFFFFFFFF);
+        clockView.setShadowLayer(0f, 0f, 0f, 0);
         clockView.invalidate();
+
+        if (ampmView != null) {
+            ampmView.setShadowLayer(0f, 0f, 0f, 0);
+            ampmView.invalidate();
+        }
+        if (greeting != null) {
+            greeting.setShadowLayer(0f, 0f, 0f, 0);
+            greeting.invalidate();
+        }
+        if (dateView != null) {
+            dateView.setShadowLayer(0f, 0f, 0f, 0);
+            dateView.invalidate();
+        }
     }
 
     private void enterAmbientIdleMode() {
@@ -4365,47 +4398,42 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         root.removeCallbacks(showIdleClock);
         if (openPopup != null) openPopup.dismiss();
 
-        DecelerateInterpolator decel = new DecelerateInterpolator(1.6f);
+        PathInterpolator relaxedEase = new PathInterpolator(0.16f, 1.0f, 0.3f, 1.0f);
         int rootW = root.getWidth();
         int rootH = root.getHeight();
         float centerX = rootW / 2f;
         float centerY = rootH / 2f;
 
-        // 1. Crossfade Pre-Blurred Wallpaper (Android 11+ compatible)
+        // 1. Clear background: keep blurred wallpaper and dark overlay hidden
         if (heroArtBlur != null) {
             heroArtBlur.animate().cancel();
-            heroArtBlur.setVisibility(View.VISIBLE);
-            heroArtBlur.animate()
-                    .alpha(1f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
-                    .start();
+            heroArtBlur.setAlpha(0f);
+            heroArtBlur.setVisibility(View.GONE);
         }
-
-        // 2. Fade In Borderless Full-Screen Ambient Glass Panel
         if (ambientGlassPanel != null) {
             ambientGlassPanel.animate().cancel();
-            ambientGlassPanel.setScaleX(1f);
-            ambientGlassPanel.setScaleY(1f);
-            ambientGlassPanel.setTranslationX(0f);
-            ambientGlassPanel.setTranslationY(0f);
-            ambientGlassPanel.setVisibility(View.VISIBLE);
-            ambientGlassPanel.animate()
-                    .alpha(1f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
-                    .start();
+            ambientGlassPanel.setAlpha(0f);
+            ambientGlassPanel.setVisibility(View.GONE);
         }
 
-        // 3. Fade Out UI (grid, topButtons, hero, openSpotlightContainer, glass, clockDivider)
-        if (grid != null) grid.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (topButtonsContainer != null) topButtonsContainer.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (hero != null) hero.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (openSpotlightContainer != null) openSpotlightContainer.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (glass != null) glass.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (clockDividerView != null) clockDividerView.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        // 2. Slide UI away into relaxed idle state
+        if (grid != null) {
+            grid.animate().cancel();
+            grid.animate().alpha(0f).translationY(80f * density).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
+        }
+        if (topButtonsContainer != null) {
+            topButtonsContainer.animate().cancel();
+            topButtonsContainer.animate().alpha(0f).translationY(-60f * density).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
+        }
+        if (hero != null) {
+            hero.animate().cancel();
+            hero.animate().alpha(0f).translationY(40f * density).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
+        }
+        if (openSpotlightContainer != null) openSpotlightContainer.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
+        if (glass != null) glass.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
+        if (clockDividerView != null) clockDividerView.animate().alpha(0f).setDuration(AMBIENT_ANIM_MS).setInterpolator(relaxedEase).start();
 
-        // 4. Centered Typography Suite & Japanese Multicolor Clock
+        // 3. Center Typography Suite with Frosted Glass Shader & Luminous Glow
         if (clockBlock != null) clockBlock.bringToFront();
         float clockScale = 3.0f;
         float scaledClockHalfH = (clockView != null ? clockView.getHeight() * clockScale : 160f * density) / 2f;
@@ -4414,7 +4442,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             clockView.animate().cancel();
             clockView.setPivotX(clockView.getWidth() / 2f);
             clockView.setPivotY(clockView.getHeight() / 2f);
-            applyJapaneseClockShader();
+            applyFrostedGlassClockShader();
 
             float clockBaseX = getUnshiftedCenterX(clockView);
             float clockBaseY = getUnshiftedCenterY(clockView);
@@ -4424,7 +4452,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .scaleX(clockScale)
                     .scaleY(clockScale)
                     .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
 
@@ -4444,7 +4472,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .scaleX(ampmScale)
                     .scaleY(ampmScale)
                     .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
 
@@ -4463,7 +4491,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .scaleX(greetingScale)
                     .scaleY(greetingScale)
                     .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
 
@@ -4481,7 +4509,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .scaleX(dateScale)
                     .scaleY(dateScale)
                     .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
     }
@@ -4490,35 +4518,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (!isAmbientIdleMode) return;
         isAmbientIdleMode = false;
 
-        DecelerateInterpolator decel = new DecelerateInterpolator(1.6f);
+        PathInterpolator relaxedEase = new PathInterpolator(0.16f, 1.0f, 0.3f, 1.0f);
 
-        // 1. Crossfade Out Pre-Blurred Wallpaper
+        // 1. Ensure Blur & Dark Overlay remain off
         if (heroArtBlur != null) {
             heroArtBlur.animate().cancel();
-            heroArtBlur.animate()
-                    .alpha(0f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
-                    .start();
+            heroArtBlur.setAlpha(0f);
+            heroArtBlur.setVisibility(View.GONE);
         }
-
-        // 2. Fade Out Full-Screen Ambient Glass Panel
         if (ambientGlassPanel != null) {
             ambientGlassPanel.animate().cancel();
-            ambientGlassPanel.animate()
-                    .alpha(0f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
-                    .withEndAction(() -> {
-                        if (!isAmbientIdleMode && ambientGlassPanel != null) {
-                            ambientGlassPanel.setVisibility(View.GONE);
-                        }
-                    })
-                    .start();
+            ambientGlassPanel.setAlpha(0f);
+            ambientGlassPanel.setVisibility(View.GONE);
         }
 
-        // 3. Restore Clock, Greeting, and Date to Top-Left and Clear Shader
-        clearJapaneseClockShader();
+        // 2. Clock, Greeting, and Date return smoothly to original top-left position
+        clearFrostedGlassClockShader();
 
         if (clockView != null) {
             clockView.animate().cancel();
@@ -4527,8 +4542,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .translationY(0f)
                     .scaleX(1f)
                     .scaleY(1f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
         if (ampmView != null) {
@@ -4538,8 +4553,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .translationY(0f)
                     .scaleX(1f)
                     .scaleY(1f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
         if (greeting != null) {
@@ -4549,8 +4564,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .translationY(0f)
                     .scaleX(1f)
                     .scaleY(1f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
         if (dateView != null) {
@@ -4560,16 +4575,67 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     .translationY(0f)
                     .scaleX(1f)
                     .scaleY(1f)
-                    .setDuration(AMBIENT_ANIM_MS)
-                    .setInterpolator(decel)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
+                    .start();
+        }
+        if (clockDividerView != null) {
+            clockDividerView.animate().cancel();
+            clockDividerView.animate()
+                    .alpha(1f)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
                     .start();
         }
 
-        // 4. Fade clockDivider, grid, hero, and topButtons Back In to Alpha 1f
-        if (clockDividerView != null) clockDividerView.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (grid != null) grid.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (topButtonsContainer != null) topButtonsContainer.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (hero != null) hero.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
-        if (glass != null && glassShown) glass.animate().alpha(1f).setDuration(AMBIENT_ANIM_MS).setInterpolator(decel).start();
+        // 3. Top section pills slide in from top with relaxed animation
+        if (topButtonsContainer != null) {
+            topButtonsContainer.animate().cancel();
+            topButtonsContainer.setVisibility(View.VISIBLE);
+            topButtonsContainer.setTranslationY(-120f * density);
+            topButtonsContainer.setAlpha(0f);
+            topButtonsContainer.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
+                    .start();
+        }
+
+        // 4. Dock and all apps slide in from bottom with relaxed animation
+        if (grid != null) {
+            grid.animate().cancel();
+            grid.setVisibility(View.VISIBLE);
+            grid.setTranslationY(140f * density);
+            grid.setAlpha(0f);
+            grid.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
+                    .start();
+        }
+
+        // 5. Hero spotlight text & glass highlight
+        if (hero != null) {
+            hero.animate().cancel();
+            hero.setVisibility(View.VISIBLE);
+            hero.setTranslationY(80f * density);
+            hero.setAlpha(0f);
+            hero.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
+                    .start();
+        }
+        if (glass != null && glassShown) {
+            glass.animate().cancel();
+            glass.animate()
+                    .alpha(1f)
+                    .setDuration(WAKE_ANIM_MS)
+                    .setInterpolator(relaxedEase)
+                    .start();
+        }
     }
 }
