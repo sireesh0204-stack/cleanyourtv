@@ -4018,7 +4018,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             toggleReorder();
         });
 
-        // 6. Launcher Settings
+        // 6. Edit Dock Apps
+        if (dockRow) {
+            addDropdownRowWithIcon(rows, R.drawable.ic_swap_vert, "Edit Dock Apps", "", statusView -> {
+                settingsDropdownPopup.dismiss();
+                startDockEdit();
+            });
+        }
+
+        // 7. Launcher Settings
         addDropdownRowWithIcon(rows, R.drawable.ic_home_settings_pill, "Launcher Settings", "", statusView -> {
             settingsDropdownPopup.dismiss();
             startActivityForResult(new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
